@@ -6,17 +6,17 @@ ICONFIG_VERSION: 2.0.1
 # Add additional configuration for use with your instrument.
 
 ### The databroker catalog name. (legacy use only)
-DATABROKER_CATALOG: temp
+# DATABROKER_CATALOG: temp
 ### Tiled server profile and path name: (overrides DATABROKER_CATALOG key)
-#TILED_PROFILE_NAME: raw
+TILED_PROFILE_NAME: raw
 # Use TILED_PATH_NAME according to local tiled server configuration
-#TILED_PATH_NAME: /raw
+TILED_PATH_NAME: /raw
 
 ### RunEngine configuration
 RUN_ENGINE:
     DEFAULT_METADATA:
-        beamline_id: demo_instrument
-        instrument_name: Most Glorious Scientific Instrument
+        beamline_id: 3-ID-B,C,D
+        instrument_name: 3-ID-C
         proposal_id: commissioning
 
     ### EPICS PV to use for the `scan_id`.
@@ -44,7 +44,7 @@ BASELINE_LABEL:
 BEC:
     BASELINE: true
     HEADING: true
-    PLOTS: false
+    PLOTS: true
     TABLE: true
 
 ### Support for known output file formats.
@@ -55,12 +55,12 @@ NEXUS_DATA_FILES:
     FILE_EXTENSION: hdf
 
 SPEC_DATA_FILES:
-    ENABLE: true
+    ENABLE: false
     FILE_EXTENSION: dat
 
 ### APS Data Management
 ### Learn environment variables for Data Management from this file:
-DM_SETUP_FILE: "/home/dm/etc/dm.setup.sh"
+# DM_SETUP_FILE: "/home/dm/etc/dm.setup.sh"
 
 # ----------------------------------
 

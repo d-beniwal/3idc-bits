@@ -1,5 +1,48 @@
 # Guarneri-style device YAML configuration
 
+# apstools.devices.ad_creator:
+#   # Eiger2 500k
+#   - name: eiger2
+#     prefix: "dp_eiger_sn:"
+#     labels: ["area_detector", "detectors"]
+#     plugins:
+#       - cam:
+#           class: id3c.devices.area_detector.EigerDetectorCam_V34
+#       - image
+#       - pva
+#       # - hdf1:
+#       #     class: apstools.devices.AD_EpicsFileNameHDF5Plugin
+#       #     read_path_template: "/path/to/bluesky/tmp/"  FIXME
+#       #     write_path_template: "s3ida/XRD/"  FIXME
+#       - roi1
+#       - stats1
+
+apstools.devices.motor_factory.mb_creator:
+- name: sample_stage
+  labels: [ "baseline" ]
+  prefix: ""
+  class_name: SampleStage
+  motors:
+    x: "3idxps1:m4"  # translation
+    y: "3idc:m42"    # translation (vertical)
+    z: "3idxps1:m3"  # translation (beam direction)
+    omega: "3idxps1:m5"  # rotation around vertical
+- name: detector_stage
+  labels: [ "baseline" ]
+  prefix: ""
+  class_name: DetectorStage
+  motors:
+    x: "3idc:m43"  # translation
+    y: "3idc:m35"  # translation Eiger2
+    z: "3idc:m36"  # translation Eiger2
+- name: laser_optics
+  labels: [ "baseline" ]
+  prefix: "3idxps1:"
+  class_name: LaserOptics
+  motors:
+    us: m1
+    ds: m2
+
 apsbits.utils.sim_creator.predefined_device:
 - { creator: ophyd.sim.motor, name: sim_motor }
 - { creator: ophyd.sim.noisy_det, name: sim_det }
@@ -31,19 +74,3 @@ apsbits.utils.sim_creator.predefined_device:
 # - {name: m2, prefix: gp:m2, labels: ["motor"]}
 # - {name: m3, prefix: gp:m3, labels: ["motor"]}
 # - {name: m4, prefix: gp:m4, labels: ["motor"]}
-
-# apstools.devices.ad_creator:
-#   - name: adsimdet
-#     prefix: "ad:"
-#     labels: ["area_detector", "detectors"]
-#     plugins:
-#       - cam:
-#           class: apstools.devices.SimDetectorCam_V34
-#       - image
-#       - pva
-#       - hdf1:
-#           class: apstools.devices.AD_EpicsFileNameHDF5Plugin
-#           read_path_template: "/path/to/bluesky/tmp/"
-#           write_path_template: "/path/to/ioc/tmp/"
-#       - roi1
-#       - stats1
