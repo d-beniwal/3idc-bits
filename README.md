@@ -2,30 +2,6 @@
 
 Instrument Github Repository to be used with BITS structure at the APS
 
-## Create repository from this template.
-
-[Creating a repository from a template](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)
-
-On GitHub, navigate to the main page of the repository.
-
-Above the file list, click Use this template.
-
-Select Create a new repository.
-
-![Screenshot of the "Use this template" button and the dropdown menu expanded to show the "Open in a codespace" option.
-](.github/resources/use-this-template-button.webp)
-
-Alternatively, you can open the template in a codespace and publish your work to a new repository later. For more information, see [Creating a codespace from a template](https://docs.github.com/en/codespaces/developing-in-a-codespace/creating-a-codespace-from-a-template).
-
-Use the Owner dropdown menu to select the account you want to own the repository.
-
-
-![Image 3](.github/resources/create-repository-owner.webp)
-
-
-Click Create repository from template.
-
-##
 
 ## Installing your own BITS instrument
 

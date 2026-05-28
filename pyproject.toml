@@ -3,7 +3,7 @@ requires = [ "setuptools>=77.0", "setuptools_scm[toml]>=8.0",]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bits_instrument"
+name = "3idc-bits"
 version = "0.0.1"
 description = "BITS Instrument Package"
 readme = "README.md"
@@ -53,7 +53,7 @@ target-version = "py311"
 [project.optional-dependencies]
 dev = [ "build", "isort", "mypy", "pre-commit", "pytest", "ruff",]
 doc = [ "babel", "ipykernel", "jinja2", "markupsafe", "myst_parser", "nbsphinx", "pydata-sphinx-theme", "pygments-ipython-console", "pygments", "sphinx-design", "sphinx-tabs", "sphinx",]
-all = [ "bits_instrument[dev,doc]",]
+all = [ "3idc-bits[dev,doc]",]
 
 [project.urls]
 Homepage = "https://BCDA-APS.github.io/BITS/"
