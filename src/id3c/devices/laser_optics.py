@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 
 from bluesky import plan_stubs as bps
+from bluesky.utils import plan
 from ophyd import Component as Cpt
 from ophyd import MotorBundle
 from ophyd import Signal
@@ -90,6 +91,7 @@ class LaserOptics(MotorBundle):
     # ------------------------------------------------------------------
     # Plan methods (use as ``yield from laser_optics.move_out()``)
 
+    @plan
     def move_out(self):
         """Move both axes to ``out_position`` and verify."""
         target = self.out_position.get()
@@ -105,6 +107,7 @@ class LaserOptics(MotorBundle):
                 f"ds={self.ds.user_readback.get()}."
             )
 
+    @plan
     def move_in(self):
         """Move both axes to ``in_position`` and verify."""
         target = self.in_position.get()
