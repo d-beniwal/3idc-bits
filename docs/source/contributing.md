@@ -92,6 +92,28 @@ Doc builds run in CI (`.github/workflows/docs.yml`); on push to
 the lint job, the docs build is **advisory** -- failures show but do
 not block.
 
+### Slide decks (Marp)
+
+The presentations under `docs/source/presentations/intro_*.md` are
+written for [Marp](https://marp.app/) and rendered to HTML + PDF
+by the same CI workflow.  Marp is a **Node.js / npm** tool, not a
+Python package; it cannot live in `pyproject.toml`.  You only need
+it if you want to *render* the decks locally; *editing* them is
+plain Markdown editing.
+
+Render locally with `npx` (no install):
+
+```bash
+cd docs/source/presentations
+npx @marp-team/marp-cli intro_standard.md -o intro_standard.html
+```
+
+Or install the [Marp for VS Code](https://marketplace.visualstudio.com/items?itemName=marp-team.marp-vscode)
+extension for live preview.
+
+See [Presentations](presentations/index.md) for the audience and
+length of each deck.
+
 ## Reporting issues
 
 Issue tracker: <https://github.com/BCDA-APS/3idc-bits/issues>.

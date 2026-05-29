@@ -49,6 +49,41 @@ jobs:
           make html
           ls -la build/html/index.html
 
+      - name: Set up Node.js (for Marp CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Marp CLI
+        run: |
+          set -vxeuo pipefail
+          npm install -g @marp-team/marp-cli
+          marp --version
+
+      - name: Render Marp slide decks (HTML + PDF)
+        # Output goes into the Sphinx HTML output tree so the decks
+        # are deployed alongside the rest of the docs under
+        # gh-pages/presentations/.  The presentations/index.md
+        # Sphinx page links to these URLs.
+        #
+        # PDF rendering uses Marp's bundled Chromium-via-Puppeteer
+        # path.  If it fails on a given runner, the HTML is still
+        # built; we just won't have a PDF on that build.
+        run: |
+          set -vxeo pipefail
+          mkdir -p docs/build/html/presentations
+          for src in docs/source/presentations/intro_*.md; do
+            name=$(basename "$src" .md)
+            echo "Rendering $name (HTML)..."
+            marp --html=true "$src" \
+              -o "docs/build/html/presentations/${name}.html"
+            echo "Rendering $name (PDF)..."
+            marp --pdf --allow-local-files "$src" \
+              -o "docs/build/html/presentations/${name}.pdf" \
+              || echo "WARNING: PDF render failed for $name (HTML is still built)"
+          done
+          ls -la docs/build/html/presentations/
+
       - name: Upload built docs as artifact
         uses: actions/upload-artifact@v4
         with:

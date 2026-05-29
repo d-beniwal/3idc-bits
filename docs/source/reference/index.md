@@ -8,6 +8,7 @@ Information-oriented.  Look things up; do not learn from these pages.
 cheat_sheet
 quick_reference
 configuration
+../presentations/index
 ```
 
 ## Auto-generated API reference

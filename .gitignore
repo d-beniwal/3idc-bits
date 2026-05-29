@@ -73,6 +73,12 @@ docs/_build/
 docs/build/
 docs/source/api/
 
+# Locally-built Marp slide artifacts (CI builds the canonical versions
+# into docs/build/html/presentations/, deployed to gh-pages).
+docs/source/presentations/*.html
+docs/source/presentations/*.pdf
+docs/source/presentations/_*
+
 # PyBuilder
 .pybuilder/
 target/

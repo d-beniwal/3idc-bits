@@ -69,10 +69,17 @@ source_suffix = {
 }
 
 # Files / dirs Sphinx should ignore.
+#
+# Note: the Marp slide-deck source files under presentations/intro_*.md
+# are excluded.  Sphinx would otherwise try to parse them as MyST
+# Markdown and reject the Marp front-matter.  The presentations/index.md
+# page (which IS a Sphinx page) links out to the HTML/PDF artifacts
+# that CI builds from those sources.
 exclude_patterns = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
+    "presentations/intro_*.md",
 ]
 
 # Where the top of the toctree lives.
