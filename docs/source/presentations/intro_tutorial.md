@@ -242,14 +242,16 @@ the call does nothing.  The `@plan` decorator catches that.
 ## Part 4: the `@plan` decorator
 
 All plans and plan stubs we author are decorated with
-`bluesky.utils.plan`.  This wraps the returned generator so that
-discarding it without iteration emits a `RuntimeWarning` at GC time
-pointing at the user's call site:
+`bluesky.utils.plan`.  If you call one without `RE(...)`, a
+warning prints shortly after you press Enter:
 
 ```
 RuntimeWarning: plan `sim_print_plan` was never iterated,
                 did you mean to use `yield from`?
 ```
+
+The warning's traceback points at *your* command line, not at
+internal Bluesky code, so you can see exactly which line to retype.
 
 Convention: every new plan/plan-stub in `src/id3c/` gets `@plan`.
 See `AGENTS.md` > "`@plan` decorator on our own plans".

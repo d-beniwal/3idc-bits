@@ -162,9 +162,16 @@ def broken_plan():
 ```
 
 Cases (4) and (5) are exactly what the [`@plan`
-decorator](plans_and_stubs.md#the-plan-decorator) catches: discarding
-a `@plan`-decorated generator triggers a `RuntimeWarning` at GC time
-saying *plan `foo` was never iterated, did you mean to use `yield from`?*.
+decorator](plans_and_stubs.md#the-plan-decorator) catches.  Type
+`my_plan(...)` without `RE(...)`, and a warning appears shortly
+after you press Enter:
+
+```
+RuntimeWarning: plan `my_plan` was never iterated,
+                did you mean to use `yield from`?
+```
+
+That warning is your cue to retype the command with `RE(...)`.
 
 ## Mental model for the SPEC user
 

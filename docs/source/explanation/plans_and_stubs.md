@@ -57,12 +57,13 @@ a matter of calling an existing `bp.*` plan, not writing one yourself.
 
 ## The `@plan` decorator
 
-`bluesky.utils.plan` wraps a generator function so that the generator
-object it returns -- a `bluesky.utils.Plan` -- emits a `RuntimeWarning`
-at garbage-collection time if it was never iterated.
+`bluesky.utils.plan` wraps your function so that, if you call it
+without `RE(...)` (or `yield from`), Python prints a warning
+shortly after you press Enter -- usually right next to the next
+prompt.
 
-In plain English: it catches the common mistake of typing
-`my_plan(...)` at the IPython prompt instead of `RE(my_plan(...))`.
+It catches the common mistake of typing `my_plan(...)` at the
+IPython prompt instead of `RE(my_plan(...))`.
 
 Compare:
 
@@ -86,10 +87,10 @@ my_plan()
 #                 did you mean to use `yield from`?
 ```
 
-The warning is emitted when the `Plan` object is garbage-collected,
-which usually happens immediately after the unused expression at the
-prompt.  The warning's traceback points at your call site, not at
-internal Bluesky code.
+The warning shows up shortly after the prompt returns -- typically
+mixed in with the next prompt line.  The traceback it prints points
+at *your* call site, not at internal Bluesky code, so you can see
+exactly which line you typed.
 
 ### Convention in this repo
 
@@ -112,8 +113,9 @@ passed through normally).
   RunEngine to do.
 - It does not validate the message stream.
 - It does not prevent you from calling the function without `RE(...)`
-  -- it only *warns* (at GC time), so a tight loop or a script that
-  exits quickly may still discard the warning before you see it.
+  -- it only *warns*.  A tight loop or a script that exits quickly
+  may finish before the warning is printed, so you may not see it
+  in non-interactive contexts.
 - It does not perform any work at decoration time; the cost is one
   `Plan` object wrapper per call.
 

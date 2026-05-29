@@ -42,8 +42,8 @@ laser_optics.is_out                 # data -- no RE
 RE(laser_optics.move_out())         # plan method -- use RE
 ```
 
-Forgetting `RE(...)` silently does nothing.  Our plans warn you
-at GC time thanks to the `@plan` decorator.
+Forgetting `RE(...)` silently does nothing.  Our plans print a
+warning shortly after you press Enter, so you'll know to retype.
 
 ---
 

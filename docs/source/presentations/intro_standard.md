@@ -97,14 +97,14 @@ sim_print_plan()           # WRONG -- no RE -- nothing happens
 ```
 
 Our plans are decorated with `bluesky.utils.plan`.  This makes
-the bare call emit a `RuntimeWarning` at GC time:
+the bare call print a warning shortly after you press Enter:
 
 ```
 RuntimeWarning: plan `sim_print_plan` was never iterated,
                 did you mean to use `yield from`?
 ```
 
-That warning is the cue to retype with `RE(...)`.
+That warning is your cue to retype with `RE(...)`.
 
 ---
 
