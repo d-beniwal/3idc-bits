@@ -52,7 +52,7 @@ apstools.devices.motor_factory.mb_creator:
     ds: m2
     # interlock sample_stage.omega
     # motion prevented when laser_optics is not OUT
-    # OUT is-75 mm +/- 1
+    # OUT is -75 mm +/- 1
     # IN is 75 mm +/- 1
     # TODO: which axis?
     # Needs custom class for IN & OUT states
