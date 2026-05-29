@@ -329,7 +329,7 @@ Subscribers consume the stream live:
 
 - **`bec`** -- BestEffortCallback: prints tables, opens plots
 - **TiledWriter** -- sends documents to the Tiled server
-- **specwriter** (optional) -- writes SPEC-format files
+- **nxwriter** (optional) -- writes NeXus-format HDF5 files
 
 You can add your own: `RE.subscribe(my_callback)`.
 
