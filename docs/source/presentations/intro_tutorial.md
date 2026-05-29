@@ -481,7 +481,7 @@ Welcome to Bluesky at 3-ID-C.
 ## References
 
 - This repo: <https://github.com/BCDA-APS/3idc-bits>
-- Docs: <https://bcda-aps.github.io/3idc-bits/> *(once Pages is enabled)*
+- Docs: <https://bcda-aps.github.io/3idc-bits/>
 - Bluesky upstream: <https://blueskyproject.io/>
 - apsbits: <https://github.com/BCDA-APS/apsbits>
 - Tiled: <https://blueskyproject.io/tiled/>

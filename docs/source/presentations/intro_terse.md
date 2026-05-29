@@ -49,7 +49,7 @@ warning shortly after you press Enter, so you'll know to retype.
 
 ## Where to learn more
 
-- **Docs site:** <https://bcda-aps.github.io/3idc-bits/> (pending Pages enable)
+- **Docs site:** <https://bcda-aps.github.io/3idc-bits/>
 - **Cheat sheet:** `reference/cheat_sheet.md`
 - **From SPEC:** `tutorials/spec_to_bluesky.md`
 - **From EPICS:** `tutorials/epics_to_ophyd.md`
@@ -62,6 +62,8 @@ warning shortly after you press Enter, so you'll know to retype.
 conda activate <env>
 ipython
 ```
+
+These plans use simulators.  They do not use the 3-ID-C hardware.
 
 ```python
 from id3c.startup import *

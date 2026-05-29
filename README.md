@@ -6,8 +6,9 @@ for APS beamline 3-ID-C.  Built on the
 
 ## Documentation
 
-Full documentation is published from the `gh-pages` branch.  Build
-locally:
+Full documentation: <https://bcda-aps.github.io/3idc-bits/>
+
+Build locally:
 
 ```bash
 pip install -e .[doc]

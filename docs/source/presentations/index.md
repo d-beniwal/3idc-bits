@@ -22,15 +22,14 @@ PDF versions are at the same URLs with `.pdf` instead of `.html`:
 
 ## Markdown sources
 
-If GitHub Pages is not yet available, or you want to read the
-sources directly:
+To read the slide sources directly (e.g. to grep, copy, or edit):
 
 - [intro_terse.md](https://github.com/BCDA-APS/3idc-bits/blob/main/docs/source/presentations/intro_terse.md)
 - [intro_standard.md](https://github.com/BCDA-APS/3idc-bits/blob/main/docs/source/presentations/intro_standard.md)
 - [intro_tutorial.md](https://github.com/BCDA-APS/3idc-bits/blob/main/docs/source/presentations/intro_tutorial.md)
 
-The Markdown is human-readable as a fallback -- the slide breaks
-are `---` lines and the rest is plain Markdown.
+The Markdown is human-readable on its own -- the slide breaks are
+`---` lines and the rest is plain Markdown.
 
 ## Building locally
 
