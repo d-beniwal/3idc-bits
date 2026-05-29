@@ -2,8 +2,6 @@
 EPICS area_detector definitions for ID8.
 """
 
-import logging
-
 from apstools.devices import CamMixin_V34
 from ophyd import ADComponent
 from ophyd import EpicsSignal

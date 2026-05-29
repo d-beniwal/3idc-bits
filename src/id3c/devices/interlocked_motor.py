@@ -46,7 +46,9 @@ mutually-interlocked devices.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Iterable, Optional
+from typing import Callable
+from typing import Iterable
+from typing import Optional
 
 from ophyd import EpicsMotor
 
@@ -83,6 +85,12 @@ class InterlockedEpicsMotor(EpicsMotor):
     """
 
     def __init__(self, *args, interlock_description: str = "", **kwargs):
+        """Initialize; pop ``interlock_description`` before EpicsMotor.
+
+        ``interlock`` and ``interlock_watch`` are initialized to inert
+        defaults and are expected to be assigned post-construction
+        (see the module docstring).
+        """
         # Pop custom kwargs before delegating to EpicsMotor, which does
         # not tolerate unknown kwargs.
         self.interlock_description: str = interlock_description
@@ -127,9 +135,7 @@ class InterlockedEpicsMotor(EpicsMotor):
                 permitted = False
             if permitted:
                 return
-            logger.warning(
-                "%s: mid-motion interlock trip; stopping motor.", self.name
-            )
+            logger.warning("%s: mid-motion interlock trip; stopping motor.", self.name)
             try:
                 self.stop(success=False)
             except Exception:
