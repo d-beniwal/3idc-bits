@@ -22,6 +22,10 @@ jobs:
   lint:
     name: Code style
     runs-on: ubuntu-latest
+    # Advisory only: this job reports style violations but does not
+    # block merging or fail the workflow.  See the "Optional: pre-commit
+    # hook" section of README.md for the opt-out policy.
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +44,6 @@ jobs:
   test-matrix:
     name: Python ${{ matrix.python-version }} # - Redis ${{ matrix.redis-version }}
     runs-on: ubuntu-latest
-    needs: lint
     strategy:
       matrix:
         python-version:

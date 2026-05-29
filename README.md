@@ -17,8 +17,34 @@ pip install apsbits
 ```bash
 export YOUR_INSTRUMENT_NAME=new_instrument
 create-bits $YOUR_INSTRUMENT_NAME
-pip install -e .
+pip install -e .[all]
 ```
+
+
+### Optional: pre-commit hook
+
+The `[all]` extra installs [`pre-commit`](https://pre-commit.com/) along with
+the formatters it drives (ruff, ruff-format).  To have them run automatically
+on each `git commit` -- auto-fixing style and rejecting commits that still
+fail -- run once per clone:
+
+```bash
+pre-commit install
+```
+
+**The hook is a developer convenience, not a requirement.**  Several ways to
+opt out, in order of decreasing scope:
+
+- **Never enable it.**  If you have not run `pre-commit install`, the hook
+  does not exist and nothing happens at commit time.
+- **Disable it for this clone:** `pre-commit uninstall`
+- **Skip the toolchain entirely:** install with `pip install -e .` (no
+  `[all]`); `pre-commit` will not be available locally.
+- **Skip a single commit:** `git commit --no-verify`
+
+CI runs `pre-commit run --all-files` on every push and PR, but the lint job
+is **advisory** -- it does not block merging or fail the build.  Opt-out is
+fully supported; mis-formatted code can reach `main` without CI complaint.
 
 
 ## IPython console Start
