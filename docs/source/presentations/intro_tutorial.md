@@ -158,6 +158,10 @@ Being honest:
   a generic mechanism, not bespoke per-beamline code.
 - **Catalog-backed history.** `cat[-1]` is the most recent run,
   `cat[uid]` is a specific one; you can search by metadata.
+- **Area detectors.** ophyd wraps the EPICS areaDetector control
+  interface and reads back HDF5 image files via the run's master
+  file (see [how_to/visualize_hdf5](../how_to/visualize_hdf5.md)
+  for the current state at 3-ID-C).
 
 ---
 
