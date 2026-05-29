@@ -34,7 +34,15 @@ apstools.devices.motor_factory.mb_creator:
     x: "3idxps1:m4"  # translation
     y: "3idc:m42"    # translation (vertical)
     z: "3idxps1:m3"  # translation (beam direction)
-    omega: "3idxps1:m5"  # rotation around vertical
+    # omega is interlocked against laser_optics; see
+    # setup_omega_laser_interlock in
+    # src/id3c/devices/omega_laser_interlock.py (called from
+    # src/id3c/startup.py).  The 'class' key here makes mb_creator
+    # instantiate this axis as InterlockedEpicsMotor.
+    omega:
+      prefix: "3idxps1:m5"  # rotation around vertical
+      class: id3c.devices.interlocked_motor.InterlockedEpicsMotor
+      interlock_description: "laser_optics OUT"
 - name: detector_stage
   labels: [ "baseline" ]
   prefix: ""
@@ -43,19 +51,17 @@ apstools.devices.motor_factory.mb_creator:
     x: "3idc:m43"  # translation
     y: "3idc:m35"  # translation Eiger2
     z: "3idc:m36"  # translation Eiger2
+
+# laser_optics axes are interlocked against sample_stage.omega (both
+# directions).  See setup_omega_laser_interlock in
+# src/id3c/devices/omega_laser_interlock.py (called from
+# src/id3c/startup.py).
+# Position semantics: IN = +75 mm, OUT = -75 mm, tolerance = +/- 1 mm
+# (defaults defined on the LaserOptics class).
+id3c.devices.laser_optics.LaserOptics:
 - name: laser_optics
   labels: [ "baseline" ]
   prefix: "3idxps1:"
-  class_name: LaserOptics
-  motors:
-    us: m1
-    ds: m2
-    # interlock sample_stage.omega
-    # motion prevented when laser_optics is not OUT
-    # OUT is -75 mm +/- 1
-    # IN is 75 mm +/- 1
-    # TODO: which axis?
-    # Needs custom class for IN & OUT states
 
 apsbits.utils.sim_creator.predefined_device:
 - { creator: ophyd.sim.motor, name: sim_motor }
