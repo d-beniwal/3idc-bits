@@ -52,7 +52,7 @@ target-version = "py311"
 
 [project.optional-dependencies]
 dev = [ "build", "isort", "mypy", "pre-commit", "pytest", "ruff",]
-doc = [ "babel", "ipykernel", "jinja2", "linkify-it-py", "markupsafe", "myst_parser", "nbsphinx", "pydata-sphinx-theme", "pygments-ipython-console", "pygments", "sphinx-autoapi", "sphinx-copybutton", "sphinx-design", "sphinx-tabs", "sphinx",]
+doc = [ "babel", "ipykernel", "jinja2", "linkify-it-py", "markupsafe", "myst-nb", "pydata-sphinx-theme", "pygments-ipython-console", "pygments", "sphinx-autoapi", "sphinx-copybutton", "sphinx-design", "sphinx-tabs", "sphinx",]
 all = [ "3idc-bits[dev,doc]",]
 
 [project.urls]

@@ -52,8 +52,10 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",  # numpy/google docstring styles
-    # Markdown source support
-    "myst_parser",
+    # Markdown + Jupyter notebook source support.
+    # myst_nb extends myst_parser; do not list myst_parser separately.
+    # See nb_execution_mode below for notebook-execution policy.
+    "myst_nb",
     # Auto API reference, generated from src/id3c at build time
     "autoapi.extension",
     # Niceties
@@ -62,10 +64,14 @@ extensions = [
     "sphinx_tabs.tabs",
 ]
 
-# File types Sphinx will read.  Markdown files are handled by myst_parser.
+# File types Sphinx will read.
+#   .md     -- MyST Markdown (parser: myst-nb, which extends myst_parser)
+#   .ipynb  -- Jupyter notebook (parser: myst-nb)
+#   .rst    -- reStructuredText (parser: built-in)
 source_suffix = {
     ".rst": "restructuredtext",
-    ".md": "markdown",
+    ".md": "myst-nb",
+    ".ipynb": "myst-nb",
 }
 
 # Files / dirs Sphinx should ignore.
@@ -80,6 +86,7 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "presentations/intro_*.md",
+    "**/.ipynb_checkpoints",
 ]
 
 # Where the top of the toctree lives.
@@ -99,6 +106,15 @@ myst_enable_extensions = [
 
 # Don't auto-generate header anchors for h4+, keeps cross-references clean.
 myst_heading_anchors = 3
+
+# -- myst-nb (Jupyter notebooks) ---------------------------------------------
+
+# Never execute notebooks at build time.  This repo is developed off-network;
+# many of our notebooks call into EPICS-backed devices that will not connect
+# in CI or on a developer laptop.  Notebooks are committed with their cached
+# outputs and rendered as-is.  To refresh outputs, re-execute the notebook
+# manually on the beamline workstation and commit the updated file.
+nb_execution_mode = "off"
 
 # -- sphinx-autoapi configuration --------------------------------------------
 
