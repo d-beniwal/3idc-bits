@@ -156,6 +156,11 @@ Being honest:
   TiledWriter for storage).  Standardized format.
 - **Suspenders.** "Pause on beam dump, resume when it returns" is
   a generic mechanism, not bespoke per-beamline code.
+
+---
+
+## Part 2: things Bluesky does that SPEC doesn't (cont.)
+
 - **Catalog-backed history.** `cat[-1]` is the most recent run,
   `cat[uid]` is a specific one; you can search by metadata.
 - **Area detectors.** ophyd wraps the full EPICS areaDetector
