@@ -58,7 +58,7 @@ the *why*.
 ## Part 1: shape of a session
 
 ```bash
-conda activate <env>
+conda activate 3idc-bits
 ipython
 ```
 
@@ -103,6 +103,8 @@ sim_motor, sim_det       # simulators
 
 `%wa` shows everything.  Tab-completion works on devices.
 
+`listobjects()`  Concise table of all top-level control devices.
+
 ---
 
 ## Part 2: SPEC -> Bluesky (1/2) -- motion and inspection
@@ -136,16 +138,19 @@ Being honest:
 - **Compactness.** `ascan samx 0 10 10 1` is shorter than the
   Bluesky equivalent.  We can alias common commands, but bare
   commands are longer.
-- **Macros.** `do.mac` is faster to write than authoring a
+- **Macros.** `overnight.mac` is faster to write than authoring a
   Python plan.
 - **One command -> one file.** SPEC files are human-readable text.
   Bluesky runs live in a Tiled catalog; you need a client to read.
 - **Decades of stability.** SPEC's command set is unchanged;
   Bluesky is younger.
+- **Programming Language** -- SPEC's uses a familiar C-like syntax.
+  The SPEC macro language adopts C-like syntax conventions, but it
+  unique to SPEC, the language support is limited to the SPEC user community.
 
 ---
 
-## Part 2: things Bluesky does that SPEC doesn't
+## Part 2: things Bluesky does that SPEC doesn't (1/2)
 
 - **Structured metadata** -- every run has a UID, a `scan_id`, and
   a `md=` dict you can search later.
@@ -159,8 +164,11 @@ Being honest:
 
 ---
 
-## Part 2: things Bluesky does that SPEC doesn't (cont.)
+## Part 2: things Bluesky does that SPEC doesn't (2/2)
 
+- **Programming Language** -- Python is a popular & well-documented
+  language.  Help is available from many sources.
+- **Syntax Checking** -- Syntax checking is inherent to Python.
 - **Catalog-backed history.** `cat[-1]` is the most recent run,
   `cat[uid]` is a specific one; you can search by metadata.
 - **Area detectors.** ophyd wraps the full EPICS areaDetector
@@ -511,5 +519,6 @@ Welcome to Bluesky at 3-ID-C.
 - apsbits: <https://github.com/BCDA-APS/apsbits>
 - Tiled: <https://blueskyproject.io/tiled/>
 - Diátaxis (doc structure): <https://diataxis.fr/>
+- **Bluesky Office Hours:** [Every Wednesday, 2-3 pm on Teams](https://teams.microsoft.com/l/meetup-join/19%3ameeting_MzJjNGY5MTktOTRhZC00YmM4LThkMWMtOTJjMTYwYWU5ZGI2%40thread.v2/0?context=%7b%22Tid%22%3a%220cfca185-25f7-49e3-8ae7-704d5326e285%22%2c%22Oid%22%3a%22cd8e408e-f2c5-4590-937e-df9d934296ad%22%7d)
 
 Questions: <https://github.com/BCDA-APS/3idc-bits/issues>

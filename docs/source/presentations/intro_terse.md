@@ -27,7 +27,7 @@ style: |
 - A **Bluesky Instrument (BITS)** package for beamline 3-ID-C
 - Python package name: `id3c`
 - Built on `apsbits` (the APS BITS framework)
-- Replaces SPEC-style command-line scanning with **Bluesky**
+- Provides SPEC-style command-line scanning with **Bluesky**
 
 ---
 
@@ -63,13 +63,14 @@ warning shortly after you press Enter, so you'll know to retype.
 - **Cheat sheet:** `reference/cheat_sheet.md`
 - **From SPEC:** `tutorials/spec_to_bluesky.md`
 - **From EPICS:** `tutorials/epics_to_ophyd.md`
+- **Bluesky Office Hours:** [Every Wednesday, 2-3 pm on Teams](https://teams.microsoft.com/l/meetup-join/19%3ameeting_MzJjNGY5MTktOTRhZC00YmM4LThkMWMtOTJjMTYwYWU5ZGI2%40thread.v2/0?context=%7b%22Tid%22%3a%220cfca185-25f7-49e3-8ae7-704d5326e285%22%2c%22Oid%22%3a%22cd8e408e-f2c5-4590-937e-df9d934296ad%22%7d)
 
 ---
 
 ## Try it
 
 ```bash
-conda activate <env>
+conda activate 3idc-bits
 ipython
 ```
 

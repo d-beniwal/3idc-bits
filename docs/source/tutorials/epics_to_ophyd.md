@@ -1,10 +1,10 @@
 # Coming to Bluesky from EPICS
 
 This page is for users who know EPICS Channel Access -- `caget`,
-`caput`, `camonitor`, MEDM, `epics_get(FULL_PV)` from SPEC -- but
+`caput`, `camonitor`, MEDM, and possibly PyEpics or `epics_get(FULL_PV)` from SPEC -- but
 have not used Bluesky's device abstraction (ophyd) before.
 
-## The SPEC model: PVs are addressed by string
+## SPEC & PyEpics: PVs are addressed by string
 
 In SPEC, you read a PV by typing its full name:
 
@@ -21,7 +21,12 @@ SPEC> epics_put("3idxps1:m5.VAL", 30)
 PVs are accessed by string.  Nothing wraps the PV; the string *is*
 the handle.  If you mistype the name, SPEC complains at runtime.
 
-## The Bluesky model: PVs are wrapped in ophyd Devices
+PyEpics equivalents (`import epics`):
+
+- `epics.caget("3idxps1:m5.RBV")`
+- `epics.caput("3idxps1:m5.VAL", 30)`
+
+## Bluesky: PVs are wrapped in ophyd Devices
 
 In Bluesky, you do not address PVs directly.  Instead, a Python
 object called a **Device** wraps a set of related PVs, and you

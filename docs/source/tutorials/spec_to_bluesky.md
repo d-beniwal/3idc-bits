@@ -113,9 +113,10 @@ These are real downsides; pretending otherwise wastes everyone's time:
 - **Inline command editing.**  SPEC lets you edit and re-run scans
   by recalling the command line.  Bluesky has IPython history, which
   is close but not the same.
-- **Macros.**  SPEC's `do.mac` is sometimes faster to write than
+- **Macros.**  SPEC's `overnight.mac` is sometimes faster to write than
   authoring a Python plan, especially for one-off ideas.  Bluesky
-  plans are more reusable but more verbose to write.
+  plans are more reusable but more verbose to write.  Both can be nested,
+  Bluesky plans are easier to understand side-effects when nesting.
 - **One command, one file.**  SPEC files are human-readable text with
   per-scan headers.  Bluesky data lives in a Tiled catalog; reading
   it requires a client (Python, or a Tiled web browser).

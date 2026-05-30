@@ -123,6 +123,7 @@ That warning is your cue to retype with `RE(...)`.
 ```python
 %wa motors        # list every motor by label
 %wa baseline      # list devices in the baseline stream
+%wa               # list everything
 ```
 
 - `sample_stage`: x, y, z, **omega** (interlocked)
@@ -145,7 +146,7 @@ Bidirectional, Python-session-only:
 Raises a `MotionInterlock` exception before any CA put, or stops
 the motion in flight if the condition changes mid-move.
 
-**Scope:** Python only.  Does not write to EPICS `DISP`.  Does not
+**Scope:** Python only in this session.  Does not disable EPICS PVs.  Does not
 protect against MEDM jogs, `caput`, other Bluesky sessions, or a
 Python crash.  IOC-level interlock is a separate (and welcome)
 future improvement.
@@ -155,7 +156,7 @@ future improvement.
 ## A first session
 
 ```bash
-conda activate <env> && ipython
+conda activate 3idc-bits && ipython
 ```
 
 ```python
@@ -191,9 +192,8 @@ to `https://bcda-aps.github.io/3idc-bits/`.
 - **Queueserver** workflow -- the host scripts exist
   (`scripts/id3c_qs_host.sh`) but not yet documented for users.
 - **Validated HDF5 image readback** -- the Eiger2 master-file +
-  external-link path from detector host to Tiled server needs
-  end-to-end testing.
-- **Diffraction tools** (`hkl`) -- planned, not configured.
+  external-link path needs setup and end-to-end testing.
+- **Diffraction tools** (`hklpy2` package) -- planned, not configured.
 - **Custom plans for beamline workflows** -- to be added as needs
   emerge.
 
@@ -206,5 +206,6 @@ to `https://bcda-aps.github.io/3idc-bits/`.
 - **From SPEC:** the cross-walk in `tutorials/spec_to_bluesky.md`
 - **From EPICS:** `tutorials/epics_to_ophyd.md`
 - **Conventions for contributing:** `AGENTS.md` at the repo root
+- **Bluesky Office Hours:** [Every Wednesday, 2-3 pm on Teams](https://teams.microsoft.com/l/meetup-join/19%3ameeting_MzJjNGY5MTktOTRhZC00YmM4LThkMWMtOTJjMTYwYWU5ZGI2%40thread.v2/0?context=%7b%22Tid%22%3a%220cfca185-25f7-49e3-8ae7-704d5326e285%22%2c%22Oid%22%3a%22cd8e408e-f2c5-4590-937e-df9d934296ad%22%7d)
 
 Questions now?

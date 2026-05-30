@@ -21,7 +21,7 @@ Where to start:
 On a workstation with the conda environment already configured:
 
 ```bash
-conda activate <env>
+conda activate 3idc-bits
 ipython
 ```
 

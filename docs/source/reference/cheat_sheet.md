@@ -6,7 +6,7 @@ in a tab.
 ## Start a session
 
 ```bash
-conda activate <env>
+conda activate 3idc-bits
 ipython
 ```
 
