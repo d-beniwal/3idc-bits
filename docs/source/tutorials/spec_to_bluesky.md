@@ -53,6 +53,7 @@ built this way.
 | `# data file management`            | `cat = init_catalog(iconfig)` (Tiled-backed catalog)   | Bluesky writes structured runs to a server; no per-scan file. |
 | `newfile mydata`                    | (not applicable; runs are tagged with metadata)        | See `md={...}` in scans. |
 | `pdshow`, `pd write`                | (`bec` does this live; see [inspect data](../how_to/inspect_data.md) for after) | The `bec` callback prints tables and opens plots automatically. |
+| `qdo overnight.mac`                 | `%run -i overnight.py`                                 | load (and execute) code from a file |
 
 Bluesky's built-in scan plans live in `bluesky.plans` and are
 imported as `bp` in the session.  Plan stubs (one-shot operations

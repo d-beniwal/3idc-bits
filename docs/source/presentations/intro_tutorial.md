@@ -144,8 +144,7 @@ Being honest:
   Bluesky runs live in a Tiled catalog; you need a client to read.
 - **Decades of stability.** SPEC's command set is unchanged;
   Bluesky is younger.
-- **Programming Language** -- SPEC's uses a familiar C-like syntax.
-  The SPEC macro language adopts C-like syntax conventions, but it
+- **Programming Language** -- SPEC's uses a familiar C-like syntax but is
   unique to SPEC, the language support is limited to the SPEC user community.
 
 ---
@@ -169,6 +168,7 @@ Being honest:
 - **Programming Language** -- Python is a popular & well-documented
   language.  Help is available from many sources.
 - **Syntax Checking** -- Syntax checking is inherent to Python.
+  SPEC macros are string text, interpreted at run time.
 - **Catalog-backed history.** `cat[-1]` is the most recent run,
   `cat[uid]` is a specific one; you can search by metadata.
 - **Area detectors.** ophyd wraps the full EPICS areaDetector
@@ -209,6 +209,7 @@ The trade:
   signals a device has.
 - You **gain**:
   - Self-documenting object (tab-completion!)
+  - Search PV and connect once.
   - Long-lived connection with cached reads
   - Subscription-first API
   - `read()` -> structured dict ready for archiving
@@ -241,8 +242,8 @@ sample_stage.omega.read()
 
 ## Part 4: plans and plan stubs
 
-A **plan** publishes Bluesky documents (`bp.count`, `bp.scan`).
-A **plan stub** does not (`bps.mv`, `bps.sleep`).
+A **plan** publishes Bluesky documents: examples `bp.count`, `bp.scan`
+A **plan stub** does not publish: examples `bps.mv`, `bps.sleep`
 
 Both are *generators*: functions that yield messages for the
 RunEngine.  Both work with `RE(...)`.
@@ -252,8 +253,8 @@ The difference matters when you *write* plans:
 - Plan stubs are easy: yield from other stubs, do not bracket a run.
 - Plans need `open_run` / `close_run` (or compose a `bp.*`).
 
-Most user code is plan stubs.  Composing into a plan is usually
-calling an existing `bp.*` plan.
+Most user code is plan stubs.  Composing into a plan is usually wrapping
+an existing `bp.*` plan and including calls to plan stubs as needed.
 
 ---
 
@@ -303,6 +304,7 @@ The RunEngine is the thing that **executes** a plan.  It:
 - Iterates the generator one message at a time
 - Dispatches each message to the appropriate device
 - Publishes documents to subscribers (BEC, TiledWriter)
+- Receives CA monitors and caches values
 - Handles pauses, suspenders, errors, cleanup
 - Threads metadata through the document stream
 
@@ -323,9 +325,11 @@ At the pause prompt:
 
 ```python
 RE.resume()    # continue
-RE.stop()     # finish cleanly, success
-RE.abort()    # finish, exit_status='abort'
-RE.halt()    # emergency stop, no documents
+RE.abort()     # finish, exit_status='abort'
+
+# used less often
+RE.stop()      # finish cleanly, success
+RE.halt()      # emergency stop, no documents
 ```
 
 This is **free** -- works for every plan including custom ones.
@@ -371,7 +375,7 @@ recorded at the start and end of every run.
 
 ## Part 7: the omega <-> laser_optics interlock
 
-**Why:** when the laser pickoff optics are not retracted, they
+**Why:** when the laser optics are not retracted, they
 could collide with the rotating sample stage; symmetrically,
 pulling the laser in/out while omega is moving is also risky.
 
@@ -392,7 +396,7 @@ the relevant signals during motion (mid-flight).  Failure raises
 
 **This is a Python-session interlock.**  It does not:
 
-- Write to EPICS `DISP` fields
+- Write to EPICS PV disable fields
 - Install IOC sequencer code
 - Protect against MEDM jogs
 - Protect against `caput` from a shell
@@ -401,7 +405,7 @@ the relevant signals during motion (mid-flight).  Failure raises
 
 For *session-independent* hardware-grade protection, the right
 place is the IOC (CALC/SCALC, state notation, or a soft record
-driving `.DISP`).  Adding that is a separate (welcome) project.
+driving PV disable).  Adding that is a separate (welcome) project.
 
 This is documented honestly in the module docstring of
 `interlocked_motor.py` and in `docs/source/explanation/interlocks.md`.
@@ -432,7 +436,7 @@ For an area-detector run, the data flow is:
 
 ```
 Eiger IOC -> writes image.h5
-          -> writes master.h5 with HDF5 external link to image.h5
+custom Bluesky plan  -> writes master.h5 with HDF5 external link to image.h5
 TiledWriter -> sends run docs referencing master.h5
 client reads: client -> Tiled -> master.h5 -> image.h5 (via link)
 ```
@@ -492,8 +496,7 @@ table has the full mapping.
 - More layers between you and the PVs when things go wrong
 - Tracebacks are long; learn to read the bottom line
 
-The trade is worth it for a beamline that wants its data
-recoverable and its workflows reproducible.
+A worthy trade to gain recoverable data and reproducible workflows.
 
 ---
 
