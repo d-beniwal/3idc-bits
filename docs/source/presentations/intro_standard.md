@@ -22,6 +22,8 @@ Bluesky Instrument for beamline 3-ID-C
 
 15-minute introduction
 
+*Presented 2026-06-01*
+
 ---
 
 ## Agenda

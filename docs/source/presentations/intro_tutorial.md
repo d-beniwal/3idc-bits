@@ -20,7 +20,9 @@ style: |
 
 A tutorial walkthrough
 
-*Self-paced; ~25 slides; ~45-60 minutes*
+*Self-paced; ~30 slides; ~45-60 minutes*
+
+*Presented 2026-06-01*
 
 ---
 

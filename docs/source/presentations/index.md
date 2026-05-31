@@ -11,8 +11,8 @@ matches your time budget.
 | Deck | Slides | Time | Audience |
 |------|--------|------|----------|
 | [Terse](https://bcda-aps.github.io/3idc-bits/presentations/intro_terse.html) | 6 | 5 min | Anyone who needs to know "what is this?" right now |
-| [Standard](https://bcda-aps.github.io/3idc-bits/presentations/intro_standard.html) | 12 | 15 min | Team intro at a beamline meeting; the default choice |
-| [Tutorial](https://bcda-aps.github.io/3idc-bits/presentations/intro_tutorial.html) | 25 | 45-60 min | Self-paced; covers SPEC->Bluesky, EPICS->ophyd, interlocks, and what's not yet implemented |
+| [Standard](https://bcda-aps.github.io/3idc-bits/presentations/intro_standard.html) | 13 | 15 min | Team intro at a beamline meeting; the default choice |
+| [Tutorial](https://bcda-aps.github.io/3idc-bits/presentations/intro_tutorial.html) | 30 | 45-60 min | Self-paced; covers SPEC->Bluesky, EPICS->ophyd, interlocks, and what's not yet implemented |
 
 PDF versions are at the same URLs with `.pdf` instead of `.html`:
 
