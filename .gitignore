@@ -183,3 +183,6 @@ qserver/existing_plans_and_devices.yaml
 
 # Local Run Engine metadata dictionary
 .re_md_dict.yml
+
+# Per-workstation login timestamp log (created on wow.xray.aps.anl.gov)
+.loglogin
