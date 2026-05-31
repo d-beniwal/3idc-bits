@@ -87,6 +87,9 @@ exclude_patterns = [
     ".DS_Store",
     "presentations/intro_*.md",
     "**/.ipynb_checkpoints",
+    # Developer working copies (matches the .gitignore 'dev_*' pattern).
+    # These are not committed and should not appear in the docs site.
+    "**/dev_*",
 ]
 
 # Where the top of the toctree lives.

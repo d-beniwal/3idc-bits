@@ -103,6 +103,165 @@ sample_stage.omega.read()
 `read()` is the right call when you want a snapshot suitable for
 saving; `get()` is the right call when you want a number.
 
+## `motor.position` versus `signal.get()`
+
+Instrument control rests on two fundamentals: **move positioners**
+and **read detectors**.  Everything else builds on those.  This
+section is about the first half: how ophyd models a positioner, and
+why "where is this thing?" has two valid answers in Python.
+
+Both `motor.position` and `motor.user_readback.get()` return a
+single number representing "where this is right now," and in normal
+use they agree.  The distinction is what kind of ophyd object each
+is defined on:
+
+- **`motor.position`** is a property defined on *positioners* --
+  any device that inherits from `ophyd.positioner.PositionerBase`
+  (`EpicsMotor`, `SoftPositioner`, `PVPositioner`,
+  `PseudoPositioner`, and our `InterlockedEpicsMotor` via
+  `EpicsMotor`).  It returns Python's best understanding of the
+  positioner's current position.
+
+- **`signal.get()`** is the method on *Signals* -- anything that
+  inherits from `ophyd.signal.Signal` (`EpicsSignal`,
+  `EpicsSignalRO`, `Signal`, `AttributeSignal`, `DerivedSignal`).
+  It returns the current value of that one signal.
+
+A motor is a Device containing Signals (and possibly other
+Devices).  Devices nest arbitrarily -- `sample_stage` is a Device
+of motor devices; `laser_optics` adds config Signals
+(`in_position`, `out_position`, `tolerance`) and derived state on
+top.  The recursive structure is what makes paths like
+`sample_stage.x.user_readback` meaningful: each `.` walks one level
+down the tree.
+
+### A note on freshness for EPICS-backed objects
+
+`EpicsSignal` and `EpicsSignalRO` keep their cached value
+up-to-date in the background via CA monitors.  `signal.get()`
+therefore returns the most recent monitor-event value without a CA
+round-trip.  Same for any positioner property whose update is wired
+to those signals -- `EpicsMotor.position` reflects the latest
+readback monitor it has received.
+
+A `SoftPositioner` might not have CA in the loop -- it could be a
+pure-Python simulator or a wrapper with greater complexity.  Its
+`.position` reflects whatever its local logic has set, whether that
+comes from a simulation, a derived calculation, or values pulled
+from elsewhere.
+
+To force a fresh CA read (skip the cache), use
+`signal.get(use_monitor=False)`.
+
+### What positioners provide beyond signals
+
+| Member | What it is |
+|--------|------------|
+| `.position` | property -- current position (positioner's best understanding) |
+| `.moving` | property -- bool "is it moving" indication |
+| `.move(p, wait=True)` | start a move; returns a `MoveStatus` |
+| `.set(p)` | RE-friendly `move(p, wait=False)`; returns a `Status` |
+| `.stop(success=False)` | abort an in-progress move |
+| `.subscribe(cb, event_type='readback')` | callback fires on each position update |
+
+### Positioner is an interface, not a hardware kind
+
+Every positioner -- whether it wraps an EPICS motor record, a
+temperature controller, a virtual axis, or a pure-Python simulator
+-- implements the same small interface.  The methods are `.move()`,
+`.set()`, `.stop()`.  The Bluesky-relevant attributes are:
+
+- **`.position`** -- current readback (the positioner's best
+  understanding)
+- **`.setpoint`** (or, for `EpicsMotor`, `.user_setpoint`) -- the
+  most recently commanded target
+- **`.readback`** (or `.user_readback` for `EpicsMotor`) -- the
+  signal whose value drives `.position`
+- **`.moving`** -- bool "is it moving" indication
+
+Motion completion is reported through a `MoveStatus` object
+returned by `.set()` / `.move(wait=False)`.
+
+What changes between positioner implementations is *how the
+interface is implemented*, not *how a plan uses the positioner*.
+Common base classes:
+
+| Class | Underlying hardware | Typical use |
+|-------|---------------------|-------------|
+| `ophyd.EpicsMotor` | An EPICS motor record (`.VAL`, `.RBV`, `.DMOV`, `.STOP`, ...) | Stepper / servo motors driven by motor records.  The default. |
+| `ophyd.PVPositioner` | A setpoint PV + a readback PV + a "done" PV | Things like a temperature controller: real EPICS, but no motor record. |
+| `apstools.devices.PVPositionerSoftDoneWithStop` | Same, but "done" is computed in Python via a tolerance | Temperature controllers without a hardware "stable" PV. |
+| `ophyd.SoftPositioner` | Local Python logic, optionally with EPICS in the wrapper | Simulators, derived axes, custom controllers without a clean PV mapping.  Our `sim_motor`. |
+| `ophyd.PseudoPositioner` | One or more real positioners | Computed axes derived from real ones -- e.g. an `(h, k, l)` reciprocal-space pseudo-positioner derived from real `omega`, `chi`, `phi` axes.  The [`hklpy2`](https://blueskyproject.io/hklpy2/) package provides this for single-crystal diffractometry. |
+
+Because all of these expose the same positioner interface, a plan
+written for `EpicsMotor` works without change on a `PVPositioner`.
+Concrete and runnable today against the simulator:
+
+```python
+RE(bp.scan([sim_det], sim_motor, -1, 1, 11))
+```
+
+The same plan against a hypothetical temperature controller (no
+code change, just a different object):
+
+```python
+# When a temperature controller is added to this instrument, e.g. as
+# a PVPositioner subclass named 'temperature' in devices.yml:
+RE(bp.scan([scaler], temperature, 300, 400, 11))
+```
+
+This is a real temperature scan -- recorded in the catalog the same
+way a motor scan would be.  The plan doesn't know or care which
+kind of positioner it's driving; it just uses the positioner
+interface.
+
+### What Signals provide
+
+| Member | What it is |
+|--------|------------|
+| `.get()` | scalar value (cached for EPICS-backed signals) |
+| `.put(v)` | direct CA put (no RE involved) |
+| `.set(v)` | RE-friendly put; returns a `Status` |
+| `.read()` | one-entry dict `{name: {value, timestamp}}` |
+| `.subscribe(cb)` | callback on value updates |
+| `.name`, `.kind`, `.connected` | identity, classification, connection state |
+
+### `.read()` is universal
+
+Every Device *and* every Signal has a `.read()` method:
+
+- `signal.read()` -- one-entry dict.
+- `device.read()` -- merged dict of every contained Signal's
+  `.read()` whose `kind` is `hinted` or `normal`, recursively
+  walking nested Devices.  This is what the RunEngine calls during
+  a scan to populate the event document.
+
+### Addendum: the Bluesky plan-stub equivalent
+
+When a plan needs to record a value into the run's event stream:
+
+| Plan stub | Equivalent direct call | What happens |
+|-----------|------------------------|--------------|
+| `yield from bps.read(signal_or_device)` | `obj.read()` | The value is added to the run's event document under the signal's storage-form name. |
+| `yield from bps.mv(motor, p)` | `motor.move(p)` | Move; nothing returned at the plan level. |
+| `yield from bps.abs_set(motor, p)` | `motor.set(p)` | Returns the `Status` to the plan via `yield from`. |
+
+The point: at the IPython prompt you call ophyd methods directly
+to interact with hardware.  Inside a plan you `yield from` the
+corresponding stub so the RunEngine can orchestrate document
+publication, pauses, suspenders, and cleanup.
+
+### Concise rule-of-thumb table
+
+| You want... | Use... |
+|-------------|--------|
+| "Where is this motor?" (interactive) | `motor.position` |
+| One specific Signal's value (interactive) | `signal.get()` |
+| A force-fresh CA read | `signal.get(use_monitor=False)` |
+| A snapshot dict for storage | `device.read()` |
+| The same operations from inside a plan | `yield from bps.*` |
+
 ## The `kind` attribute
 
 Every ophyd Signal and Device has a `kind`:

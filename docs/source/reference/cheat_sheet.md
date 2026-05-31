@@ -92,6 +92,14 @@ run.baseline.read()                    # devices labelled 'baseline'
 Filter: `cat.search(Key("plan_name") == "scan")`
 (`from tiled.queries import Key`).
 
+```{note}
+**Two ways to ask "where is this motor?"** -- `motor.position`
+(positioner property) vs. `motor.user_readback.get()` (Signal
+method); they normally agree.  See
+[EPICS -> ophyd > `motor.position` versus
+`signal.get()`](../tutorials/epics_to_ophyd.md#motorposition-versus-signalget).
+```
+
 ## Pause / abort
 
 While a plan runs:
