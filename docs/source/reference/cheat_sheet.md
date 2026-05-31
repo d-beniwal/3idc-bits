@@ -93,6 +93,12 @@ Filter: `cat.search(Key("plan_name") == "scan")`
 (`from tiled.queries import Key`).
 
 ```{note}
+**Two name forms** -- dotted (`sample_stage.x.user_readback`) for
+controls in Python, underscored (`sample_stage_x_user_readback`)
+for keys in stored data.  Same underlying signal; see
+[EPICS -> ophyd > Dotted vs. underscored
+names](../tutorials/epics_to_ophyd.md#dotted-vs-underscored-names-controls-vs-storage).
+
 **Two ways to ask "where is this motor?"** -- `motor.position`
 (positioner property) vs. `motor.user_readback.get()` (Signal
 method); they normally agree.  See

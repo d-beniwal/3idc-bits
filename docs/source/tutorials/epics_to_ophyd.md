@@ -262,6 +262,76 @@ publication, pauses, suspenders, and cleanup.
 | A snapshot dict for storage | `device.read()` |
 | The same operations from inside a plan | `yield from bps.*` |
 
+## Dotted vs. underscored names: controls vs. storage
+
+You may have noticed something in the `read()` output earlier in
+this page: the keys are spelled with **underscores**
+(`sample_stage_omega_user_setpoint`), while in Python you address
+the same signal with **dots**
+(`sample_stage.omega.user_setpoint`).  Both name the same
+underlying signal.  They belong to two different use cases:
+
+- **Dotted form** -- for **controls** in Python.
+  `sample_stage` is a Python object; `.omega` is an attribute on
+  it; `.user_setpoint` is a Signal you can `.get()` / `.put()` /
+  `.subscribe()`.  Dots are how Python walks an object tree.
+- **Underscored form** -- for **storage**: keys in event documents,
+  columns in xarray Datasets, dataset paths in HDF5, search terms
+  in the Tiled catalog.  None of those support nested attribute
+  access; each recorded signal needs a single flat string that
+  uniquely names it across the whole instrument.
+
+The translation is mechanical: replace `.` with `_`, starting from
+the device's `name` attribute.
+
+```python
+# Controls side -- you type dotted, you get a Signal object
+sample_stage.omega.user_readback
+# EpicsSignalRO(...)
+
+# Storage side -- the same signal carries a flat string name
+sample_stage.omega.user_readback.name
+# 'sample_stage_omega_user_readback'
+
+# That string is what shows up as a key in read() and as a column
+# in catalog data
+ds = cat[uid].primary.read()
+ds["sample_stage_omega_user_readback"]
+```
+
+### Why the two forms?
+
+The split was forced by what the storage layer could accept.
+Historically Bluesky run documents were stored as JSON in MongoDB,
+and **MongoDB does not allow `.` in document field names** (it
+reserves the dot for sub-document path syntax).  The convention of
+flattening Python attribute paths to underscored strings dates from
+that constraint.  The underlying tools have evolved -- the Tiled
+server we use today does not have the MongoDB restriction -- but
+the underscored convention persists, and changing it now would
+break every existing analysis script that reads Bluesky data.
+
+### Practical rules
+
+| You are... | Use... | Example |
+|------------|--------|---------|
+| commanding the hardware | dotted | `sample_stage.omega.move(30)` |
+| reading a value in code | dotted | `sample_stage.omega.user_readback.get()` |
+| reading data back from a run | underscored | `ds["sample_stage_omega"]` |
+| writing a plan that mentions a Signal | dotted | `yield from bps.read(sample_stage.omega.user_readback)` |
+| referencing a Signal by name in a callback | underscored | `event["data"]["sample_stage_omega"]` |
+
+If unsure, ask the signal itself:
+
+```python
+sample_stage.omega.user_readback.name
+# 'sample_stage_omega_user_readback'   <-- the storage name
+```
+
+The `.name` is *usually* derived mechanically from the Python path,
+but it can be overridden when a Device is constructed
+(`Signal(..., name="custom")`).  When in doubt, trust `.name`.
+
 ## The `kind` attribute
 
 Every ophyd Signal and Device has a `kind`:
