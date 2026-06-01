@@ -15,10 +15,10 @@ apstools.devices.ad_creator:
           class: id3c.devices.area_detector.EigerDetectorCam_V34
       - image
       - pva
-      # - hdf1:
-      #     class: apstools.devices.AD_EpicsFileNameHDF5Plugin
-      #     read_path_template: "/path/to/bluesky/tmp/"  FIXME
-      #     write_path_template: "s3ida/XRD/"  FIXME
+      - hdf1:
+          class: apstools.devices.AD_EpicsFileNameHDF5Plugin
+          write_path_template: "/home/sector3/s3ida/XRD/"
+          read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
       - roi1
       - stats1
 
