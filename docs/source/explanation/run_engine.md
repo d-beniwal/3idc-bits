@@ -49,12 +49,12 @@ You can move a motor without the RunEngine.  In an IPython session,
 this just works:
 
 ```python
-sample_stage.x.move(12.3)     # direct ophyd call; the motor moves
+sample_stage.xprime.move(12.3)     # direct ophyd call; the motor moves
 ```
 
 It is a synchronous CA put.  The motor moves.  Done.
 
-So why bother with `RE(bps.mv(sample_stage.x, 12.3))`?  Because direct
+So why bother with `RE(bps.mv(sample_stage.xprime, 12.3))`?  Because direct
 ophyd calls give you **only** the motor motion.  The RunEngine path
 gives you everything that makes Bluesky useful:
 
@@ -80,9 +80,9 @@ them in `RE(...)` is wrong and will fail confusingly.  Use them
 directly:
 
 ```python
-sample_stage.x.position             # most recent setpoint (float)
-sample_stage.x.user_readback.get()  # current .RBV value
-sample_stage.x.read()               # dict of all 'normal' kind signals
+sample_stage.xprime.position             # most recent setpoint (float)
+sample_stage.xprime.user_readback.get()  # current .RBV value
+sample_stage.xprime.read()               # dict of all 'normal' kind signals
 laser_optics.is_out                 # a Python property; True/False
 ```
 
@@ -176,7 +176,7 @@ That warning is your cue to retype the command with `RE(...)`.
 ## Mental model for the SPEC user
 
 In SPEC, `mv samx 5` *is* the act of moving the motor.  In Bluesky,
-`bps.mv(sample_stage.x, 5)` is the *description* of moving the motor,
+`bps.mv(sample_stage.xprime, 5)` is the *description* of moving the motor,
 and the RunEngine is the thing that executes the description.  The
 indirection feels unnecessary at first.  It is the cost of admission
 for everything in the [table above](#direct-ophyd-calls).

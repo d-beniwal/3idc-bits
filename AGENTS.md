@@ -56,12 +56,12 @@ does nothing — the generator is created and discarded).
 
 ```python
 # Correct in examples and docs:
-RE(bps.mv(sample_stage.x, 12.3))
-RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))
+RE(bps.mv(sample_stage.xprime, 12.3))
+RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))
 RE(laser_optics.move_out())            # plan method on a Device
 
 # Wrong in examples (silently does nothing):
-bps.mv(sample_stage.x, 12.3)
+bps.mv(sample_stage.xprime, 12.3)
 laser_optics.move_out()
 ```
 

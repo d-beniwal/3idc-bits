@@ -66,8 +66,8 @@ This is the place every new Bluesky user trips.  There are **two**
 correct ways and **one** very tempting wrong way.
 
 ```ipython
-In [5]: sample_stage.x.move(12.3)         # direct ophyd; works
-In [6]: RE(bps.mv(sample_stage.x, 12.3))  # Bluesky plan; also works
+In [5]: sample_stage.xprime.move(12.3)         # direct ophyd; works
+In [6]: RE(bps.mv(sample_stage.xprime, 12.3))  # Bluesky plan; also works
 ```
 
 Both move the motor.  The difference: the second call goes through
@@ -78,7 +78,7 @@ pause/resume.
 The wrong way:
 
 ```ipython
-In [7]: bps.mv(sample_stage.x, 12.3)
+In [7]: bps.mv(sample_stage.xprime, 12.3)
 Out[7]: <generator object mv at 0x7f...>
 ```
 

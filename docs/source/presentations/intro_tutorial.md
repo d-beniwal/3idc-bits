@@ -113,9 +113,9 @@ sim_motor, sim_det       # simulators
 
 | SPEC | Bluesky |
 |------|---------|
-| `mv samx 5` | `RE(bps.mv(sample_stage.x, 5))` |
-| `mvr samx 0.1` | `RE(bps.mvr(sample_stage.x, 0.1))` |
-| `wm samx` | `sample_stage.x.position` (no `RE`!) |
+| `mv samx 5` | `RE(bps.mv(sample_stage.xprime, 5))` |
+| `mvr samx 0.1` | `RE(bps.mvr(sample_stage.xprime, 0.1))` |
+| `wm samx` | `sample_stage.xprime.position` (no `RE`!) |
 | `wa` | `%wa` |
 | `shopen` | `RE(bps.mv(shutter, "open"))` |
 
@@ -126,7 +126,7 @@ sim_motor, sim_det       # simulators
 | SPEC | Bluesky |
 |------|---------|
 | `ct 1` | `RE(bp.count([scaler]))` |
-| `ascan samx 0 10 10 1` | `RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))` |
+| `ascan samx 0 10 10 1` | `RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))` |
 | `mesh ...` | `RE(bp.grid_scan([scaler], mot1, ..., mot2, ...))` |
 
 **Note SPEC's "10 intervals" vs. Bluesky's "11 points".**
@@ -363,8 +363,8 @@ You can add your own: `RE.subscribe(my_callback)`.
 
 | device | notes |
 |--------|-------|
-| `sample_stage` | x / y / z / **omega** (interlocked) |
-| `detector_stage` | x / y / z |
+| `sample_stage` | xprime / base_y / zprime / **omega** (interlocked) |
+| `detector_stage` | det_x / eiger_y / eiger_z |
 | `laser_optics` | us / ds (interlocked with omega) |
 | `shutter` | A-station PSS shutter |
 | `eiger2` | Eiger2 500k; HDF5 file plugin still FIXME |

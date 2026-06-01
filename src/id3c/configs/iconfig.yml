@@ -42,7 +42,7 @@ BASELINE_LABEL:
 ### Defaults: all true
 ### except no plots in queueserver
 BEC:
-    BASELINE: true
+    BASELINE: false
     HEADING: true
     PLOTS: true
     TABLE: true

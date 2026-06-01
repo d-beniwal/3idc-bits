@@ -186,3 +186,6 @@ qserver/existing_plans_and_devices.yaml
 
 # Per-workstation login timestamp log (created on wow.xray.aps.anl.gov)
 .loglogin
+
+# Working notes / design docs kept in-repo but not committed
+.nogit_*

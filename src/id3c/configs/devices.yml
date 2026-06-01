@@ -19,11 +19,15 @@ apstools.devices.ad_creator:
           class: apstools.devices.AD_EpicsFileNameHDF5Plugin
           write_path_template: "/home/sector3/s3ida/XRD/"
           read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
+      - tiff1:
+          class: apstools.devices.AD_EpicsFileNameTIFFPlugin
+          write_path_template: "/home/sector3/s3ida/XRD/"
+          read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
       - roi1
       - stats1
 
 apstools.devices.ApsPssShutter:
-- name: shutter
+- name: shutterc
   prefix: "3ida:shutterC:"
   labels: ["shutters", "baseline"]
   # PVs: 3ida:shutterC:Open and 3ida:shutterC:Close
@@ -36,9 +40,9 @@ apstools.devices.motor_factory.mb_creator:
   prefix: ""
   class_name: SampleStage
   motors:
-    x: "3idxps1:m4"  # translation
-    y: "3idc:m42"    # translation (vertical)
-    z: "3idxps1:m3"  # translation (beam direction)
+    xprime: "3idxps1:m4"  # translation
+    base_y: "3idc:m42"    # translation (vertical)
+    zprime: "3idxps1:m3"  # translation (beam direction)
     # omega is interlocked against laser_optics; see
     # setup_omega_laser_interlock in
     # src/id3c/devices/omega_laser_interlock.py (called from
@@ -53,9 +57,9 @@ apstools.devices.motor_factory.mb_creator:
   prefix: ""
   class_name: DetectorStage
   motors:
-    x: "3idc:m43"  # translation
-    y: "3idc:m35"  # translation Eiger2
-    z: "3idc:m36"  # translation Eiger2
+    det_x: "3idc:m43"  # translation
+    eiger_y: "3idc:m35"  # translation Eiger2
+    eiger_z: "3idc:m36"  # translation Eiger2
 
 # laser_optics axes are interlocked against sample_stage.omega (both
 # directions).  See setup_omega_laser_interlock in

@@ -20,7 +20,7 @@ In Bluesky, you type the *description* of a motion and hand it to the
 RunEngine to execute:
 
 ```python
-RE(bps.mv(sample_stage.x, 5))
+RE(bps.mv(sample_stage.xprime, 5))
 ```
 
 The `bps.mv(...)` part returns a Python *generator* -- a description
@@ -35,20 +35,20 @@ built this way.
 
 | SPEC                                | Bluesky                                                | Notes |
 |-------------------------------------|--------------------------------------------------------|-------|
-| `mv samx 5`                         | `RE(bps.mv(sample_stage.x, 5))`                        | Move one motor to absolute position. |
-| `mv samx 5 samy 3`                  | `RE(bps.mv(sample_stage.x, 5, sample_stage.y, 3))`     | Multi-motor move (parallel). |
-| `umv samx 5`                        | `RE(bps.mv(sample_stage.x, 5))`                        | Bluesky always waits; no "update vs. non-update" distinction. |
-| `mvr samx 0.1`                      | `RE(bps.mvr(sample_stage.x, 0.1))`                     | Relative move. |
-| `wm samx`                           | `sample_stage.x.position`                              | Returns a float; no `RE(...)` -- this is *not* a plan. |
+| `mv samx 5`                         | `RE(bps.mv(sample_stage.xprime, 5))`                        | Move one motor to absolute position. |
+| `mv samx 5 samy 3`                  | `RE(bps.mv(sample_stage.xprime, 5, sample_stage.base_y, 3))`     | Multi-motor move (parallel). |
+| `umv samx 5`                        | `RE(bps.mv(sample_stage.xprime, 5))`                        | Bluesky always waits; no "update vs. non-update" distinction. |
+| `mvr samx 0.1`                      | `RE(bps.mvr(sample_stage.xprime, 0.1))`                     | Relative move. |
+| `wm samx`                           | `sample_stage.xprime.position`                              | Returns a float; no `RE(...)` -- this is *not* a plan. |
 | `wa`                                | `%wa motors` (IPython magic)                           | "where all" for motors with the `motors` label. |
 | `ct 1`                              | `RE(bp.count([scaler], num=1))`                        | One count of named detector(s). |
 | `ct 1 5`                            | `RE(bp.count([scaler], num=5, delay=...))`             | Five counts; `delay=` is between them. |
-| `ascan samx 0 10 10 1`              | `RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))`     | SPEC counts intervals; Bluesky counts **points**.  10 intervals = 11 points. |
-| `dscan samx -1 1 10 1`              | `RE(bp.rel_scan([scaler], sample_stage.x, -1, 1, 11))` | Relative scan around current position. |
-| `a2scan samx 0 10 samy 0 5 10 1`    | `RE(bp.scan([scaler], sample_stage.x, 0, 10, sample_stage.y, 0, 5, 11))` | Multi-motor synchronized scan. |
-| `mesh samx 0 10 5 samy 0 5 5 1`     | `RE(bp.grid_scan([scaler], sample_stage.x, 0, 10, 6, sample_stage.y, 0, 5, 6))` | 2-D mesh; again, +1 on each "intervals" count. |
-| `chg_offset samx 0`                 | `sample_stage.x.set_current_position(0)`               | Set the current readback to a new value (changes the offset). |
-| `set_lm samx -10 10`                | (use motor record `.LLM` / `.HLM` via `caput`, or write a plan) | Bluesky has no built-in limit-setter shortcut; ophyd exposes them as `sample_stage.x.low_limit_travel` and `.high_limit_travel`. |
+| `ascan samx 0 10 10 1`              | `RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))`     | SPEC counts intervals; Bluesky counts **points**.  10 intervals = 11 points. |
+| `dscan samx -1 1 10 1`              | `RE(bp.rel_scan([scaler], sample_stage.xprime, -1, 1, 11))` | Relative scan around current position. |
+| `a2scan samx 0 10 samy 0 5 10 1`    | `RE(bp.scan([scaler], sample_stage.xprime, 0, 10, sample_stage.base_y, 0, 5, 11))` | Multi-motor synchronized scan. |
+| `mesh samx 0 10 5 samy 0 5 5 1`     | `RE(bp.grid_scan([scaler], sample_stage.xprime, 0, 10, 6, sample_stage.base_y, 0, 5, 6))` | 2-D mesh; again, +1 on each "intervals" count. |
+| `chg_offset samx 0`                 | `sample_stage.xprime.set_current_position(0)`               | Set the current readback to a new value (changes the offset). |
+| `set_lm samx -10 10`                | (use motor record `.LLM` / `.HLM` via `caput`, or write a plan) | Bluesky has no built-in limit-setter shortcut; ophyd exposes them as `sample_stage.xprime.low_limit_travel` and `.high_limit_travel`. |
 | `shopen` / `shclose`                | `RE(bps.mv(shutter, "open"))` / `RE(bps.mv(shutter, "close"))` | (or `shutter.open()` / `shutter.close()` direct, no `RE` -- see "When NOT to use `RE`" below) |
 | `# data file management`            | `cat = init_catalog(iconfig)` (Tiled-backed catalog)   | Bluesky writes structured runs to a server; no per-scan file. |
 | `newfile mydata`                    | (not applicable; runs are tagged with metadata)        | See `md={...}` in scans. |
@@ -73,10 +73,10 @@ RE(bp.scan([detector], motor, 0, 10, 11))
 RE(laser_optics.move_out())
 
 # NOT plans -- call directly, no RE(...)
-sample_stage.x.position             # returns a float
-sample_stage.x.user_readback.get()  # returns a float
+sample_stage.xprime.position             # returns a float
+sample_stage.xprime.user_readback.get()  # returns a float
 laser_optics.is_out                 # returns a bool
-sample_stage.x.read()               # returns a dict
+sample_stage.xprime.read()               # returns a dict
 shutter.open()                      # returns immediately; the bare device method
 cat[-1].primary.read()              # returns an xarray Dataset
 ```
@@ -108,7 +108,7 @@ These are the upsides:
 These are real downsides; pretending otherwise wastes everyone's time:
 
 - **Compactness.**  `ascan samx 0 10 10 1` is much shorter than
-  `RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))`.  You can
+  `RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))`.  You can
   alias common scans to save typing, but the bare commands are
   longer.
 - **Inline command editing.**  SPEC lets you edit and re-run scans

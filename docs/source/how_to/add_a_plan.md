@@ -43,7 +43,7 @@ def park_and_count(detectors, num=1, md=None):
     """
     md = md or {}
     md = {"purpose": "park-then-count", **md}
-    yield from bps.mv(sample_stage.x, 0, sample_stage.y, 0)
+    yield from bps.mv(sample_stage.xprime, 0, sample_stage.base_y, 0)
     yield from bp.count(detectors, num=num, md=md)
 ```
 
@@ -131,7 +131,7 @@ plan or stub:
 def align_then_scan(detectors):
     yield from align_sample()              # another plan you wrote
     yield from bps.sleep(0.5)
-    yield from bp.scan(detectors, sample_stage.x, 0, 10, 11)
+    yield from bp.scan(detectors, sample_stage.xprime, 0, 10, 11)
 ```
 
 You do **not** use `RE(...)` inside another plan.  `RE(...)` is the

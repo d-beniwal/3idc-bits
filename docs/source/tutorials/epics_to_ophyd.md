@@ -132,7 +132,7 @@ Devices).  Devices nest arbitrarily -- `sample_stage` is a Device
 of motor devices; `laser_optics` adds config Signals
 (`in_position`, `out_position`, `tolerance`) and derived state on
 top.  The recursive structure is what makes paths like
-`sample_stage.x.user_readback` meaningful: each `.` walks one level
+`sample_stage.xprime.user_readback` meaningful: each `.` walks one level
 down the tree.
 
 ### A note on freshness for EPICS-backed objects
@@ -358,7 +358,7 @@ You will rarely create a `Status` yourself, but you will see them in
 the output of direct ophyd calls:
 
 ```python
-status = sample_stage.x.set(5)
+status = sample_stage.xprime.set(5)
 status                       # <MoveStatus name=... done=False>
 status.wait()                # block until the move finishes (or fails)
 status.success               # True if it finished cleanly
@@ -376,7 +376,7 @@ message references a Device by Python object, not a PV name.
 
 The PV-level conveniences (`get`, `put`, `read`) are still available
 when you need them outside a plan.  Most of the time, inside a plan,
-you write `yield from bps.mv(sample_stage.x, 5)` -- the stub knows
+you write `yield from bps.mv(sample_stage.xprime, 5)` -- the stub knows
 how to translate the device + value into the right sequence of
 messages.
 

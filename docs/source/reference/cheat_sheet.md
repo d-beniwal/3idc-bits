@@ -22,20 +22,20 @@ from id3c.startup import *
 %wa baseline         # only the 'baseline' label
 
 sample_stage         # one device by name (tab-completes)
-sample_stage.x       # one axis of a bundle
+sample_stage.xprime       # one axis of a bundle
 oregistry.device_names  # set of all registered device names
 ```
 
 ## Move motors
 
 ```python
-RE(bps.mv(sample_stage.x, 12.3))                              # absolute
-RE(bps.mv(sample_stage.x, 12.3, sample_stage.y, 5.0))         # parallel
-RE(bps.mvr(sample_stage.x, 0.1))                              # relative
+RE(bps.mv(sample_stage.xprime, 12.3))                              # absolute
+RE(bps.mv(sample_stage.xprime, 12.3, sample_stage.base_y, 5.0))         # parallel
+RE(bps.mvr(sample_stage.xprime, 0.1))                              # relative
 
-sample_stage.x.move(12.3)         # direct ophyd; no metadata, no docs
-sample_stage.x.position           # last setpoint (float)
-sample_stage.x.user_readback.get()  # .RBV value
+sample_stage.xprime.move(12.3)         # direct ophyd; no metadata, no docs
+sample_stage.xprime.position           # last setpoint (float)
+sample_stage.xprime.user_readback.get()  # .RBV value
 ```
 
 ## Count and scan
@@ -44,11 +44,11 @@ sample_stage.x.user_readback.get()  # .RBV value
 RE(bp.count([scaler]))                                   # one count
 RE(bp.count([scaler], num=10))                           # ten counts
 RE(bp.count([scaler], num=10, delay=0.5))                # ten counts, 0.5 s apart
-RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))         # 0..10 in 11 points
-RE(bp.rel_scan([scaler], sample_stage.x, -1, 1, 11))     # relative
-RE(bp.grid_scan([scaler], sample_stage.x, 0, 10, 11,
-                          sample_stage.y, 0, 5, 6))      # 2-D mesh
-RE(bp.list_scan([scaler], sample_stage.x, [0, 1.5, 3.0])) # listed points
+RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))         # 0..10 in 11 points
+RE(bp.rel_scan([scaler], sample_stage.xprime, -1, 1, 11))     # relative
+RE(bp.grid_scan([scaler], sample_stage.xprime, 0, 10, 11,
+                          sample_stage.base_y, 0, 5, 6))      # 2-D mesh
+RE(bp.list_scan([scaler], sample_stage.xprime, [0, 1.5, 3.0])) # listed points
 ```
 
 Add metadata: `md={"sample": "Si(111)", "purpose": "alignment"}`.
@@ -70,7 +70,6 @@ RE(laser_optics.move_out())            # plan method on the device
 RE(laser_optics.move_in())
 
 laser_optics.is_out                    # bool (not a plan; call directly)
-laser_optics.is_in                     # bool
 ```
 
 Note: `sample_stage.omega` will **refuse to move** unless the laser
@@ -93,8 +92,8 @@ Filter: `cat.search(Key("plan_name") == "scan")`
 (`from tiled.queries import Key`).
 
 ```{note}
-**Two name forms** -- dotted (`sample_stage.x.user_readback`) for
-controls in Python, underscored (`sample_stage_x_user_readback`)
+**Two name forms** -- dotted (`sample_stage.xprime.user_readback`) for
+controls in Python, underscored (`sample_stage_xprime_user_readback`)
 for keys in stored data.  Same underlying signal; see
 [EPICS -> ophyd > Dotted vs. underscored
 names](../tutorials/epics_to_ophyd.md#dotted-vs-underscored-names-controls-vs-storage).

@@ -1,8 +1,8 @@
 """
-Laser pickoff optics bundle (us / ds axes) with IN/OUT state.
+Laser optics bundle (us / ds axes) with IN/OUT state.
 
-The ``us`` and ``ds`` axes are upstream and downstream halves of a
-retractable laser pickoff.  At nominal positions they are either
+The ``us`` and ``ds`` axes are upstream and downstream positioners of the
+laser optics.  At nominal positions they are either
 fully ``IN`` (in the beam path) or fully ``OUT`` (retracted).
 
 This device declares its two axes as
@@ -19,15 +19,14 @@ Configuration Components (plain :class:`ophyd.Signal`, ``kind="config"``):
 
 Derived Components (:class:`ophyd.signal.AttributeSignal`, ``kind="omitted"``):
 
-* ``in_status``  -- mirrors :attr:`is_in`
 * ``out_status`` -- mirrors :attr:`is_out`
 
-These derived signals are subscribable, which is what the mid-motion
+Derived signals are subscribable, which is what the mid-motion
 interlock watcher on ``sample_stage.omega`` uses.  Note however that
 ``AttributeSignal`` itself does not emit on EPICS updates; the
 watcher should subscribe to the underlying ``us.user_readback`` and
 ``ds.user_readback`` signals (which it does, by wiring in
-``startup.py``).  ``in_status`` / ``out_status`` are exposed for
+``startup.py``).  ``out_status`` is exposed for
 manual ``.get()`` queries and for any code that just wants the
 boolean.
 """
@@ -50,10 +49,10 @@ logger = logging.getLogger(__name__)
 
 
 class LaserOptics(MotorBundle):
-    """Retractable laser pickoff with IN/OUT state and motion plans."""
+    """Retractable laser optics with IN/OUT state and motion plans."""
 
-    us = Cpt(InterlockedEpicsMotor, "m1")
-    ds = Cpt(InterlockedEpicsMotor, "m2")
+    us = Cpt(InterlockedEpicsMotor, "m1", labels=["motors"])
+    ds = Cpt(InterlockedEpicsMotor, "m2", labels=["motors"])
 
     # Tunable configuration.  Defaults match the beamline note in
     # devices.yml: IN = +75 mm, OUT = -75 mm, tolerance = +/- 1 mm.
@@ -62,9 +61,8 @@ class LaserOptics(MotorBundle):
     tolerance = Cpt(Signal, value=1.0, kind="config")
     settle_time = Cpt(Signal, value=0.0, kind="config")
 
-    # Derived state, exposed as signals so other code can subscribe
+    # Derived state, exposed as signal so other code can subscribe
     # or .get() without poking at properties.
-    in_status = Cpt(AttributeSignal, attr="is_in", kind="omitted")
     out_status = Cpt(AttributeSignal, attr="is_out", kind="omitted")
 
     # ------------------------------------------------------------------
@@ -75,13 +73,6 @@ class LaserOptics(MotorBundle):
         return abs(axis.user_readback.get() - reference.get()) <= self.tolerance.get()
 
     @property
-    def is_in(self) -> bool:
-        """True iff both axes are within tolerance of ``in_position``."""
-        ds_in = self._within(self.ds, self.in_position)
-        us_in = self._within(self.us, self.in_position)
-        return us_in and ds_in
-
-    @property
     def is_out(self) -> bool:
         """True iff both axes are within tolerance of ``out_position``."""
         ds_out = self._within(self.ds, self.out_position)
@@ -89,11 +80,16 @@ class LaserOptics(MotorBundle):
         return us_out and ds_out
 
     # ------------------------------------------------------------------
-    # Plan methods (use as ``yield from laser_optics.move_out()``)
+    # Plan methods
 
     @plan
     def move_out(self):
-        """Move both axes to ``out_position`` and verify."""
+        """Move both axes to ``out_position`` and verify.
+
+        Such as::
+
+            yield from laser_optics.move_out()
+        """
         target = self.out_position.get()
         yield from bps.mv(self.us, target, self.ds, target)
         settle = self.settle_time.get()
@@ -102,22 +98,6 @@ class LaserOptics(MotorBundle):
         if not self.is_out:
             raise MotionInterlock(
                 f"{self.name}.move_out: axes did not reach OUT "
-                f"({target} +/- {self.tolerance.get()} mm). "
-                f"us={self.us.user_readback.get()}, "
-                f"ds={self.ds.user_readback.get()}."
-            )
-
-    @plan
-    def move_in(self):
-        """Move both axes to ``in_position`` and verify."""
-        target = self.in_position.get()
-        yield from bps.mv(self.us, target, self.ds, target)
-        settle = self.settle_time.get()
-        if settle > 0:
-            yield from bps.sleep(settle)
-        if not self.is_in:
-            raise MotionInterlock(
-                f"{self.name}.move_in: axes did not reach IN "
                 f"({target} +/- {self.tolerance.get()} mm). "
                 f"us={self.us.user_readback.get()}, "
                 f"ds={self.ds.user_readback.get()}."

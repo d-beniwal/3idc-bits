@@ -77,7 +77,7 @@ SPEC> mv samx 5
 In Bluesky:
 
 ```python
-RE(bps.mv(sample_stage.x, 5))
+RE(bps.mv(sample_stage.xprime, 5))
 ```
 
 `bps.mv(...)` returns a **description** (a generator).  `RE(...)`
@@ -128,8 +128,8 @@ That warning is your cue to retype with `RE(...)`.
 %wa               # list everything
 ```
 
-- `sample_stage`: x, y, z, **omega** (interlocked)
-- `detector_stage`: x, y, z
+- `sample_stage`: xprime, base_y, zprime, **omega** (interlocked)
+- `detector_stage`: det_x, eiger_y, eiger_z
 - `laser_optics`: us, ds (interlocked)
 - `shutter`: 3ida:shutterC (A-station PSS shutter)
 - `eiger2`: Eiger2 500k area detector
@@ -165,7 +165,7 @@ conda activate 3idc-bits && ipython
 from id3c.startup import *
 %wa motors
 
-RE(bps.mv(sample_stage.x, 0))                 # move
+RE(bps.mv(sample_stage.xprime, 0))                 # move
 RE(bp.count([sim_det], num=5))                # count
 RE(bp.scan([sim_det], sim_motor, -5, 5, 11))  # scan
 

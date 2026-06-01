@@ -39,10 +39,10 @@ RE(bp.count([scaler], num=10, delay=0.5))    # ten counts, 0.5 s apart
 
 ```python
 # Absolute -- start and stop are the actual positions:
-RE(bp.scan([scaler], sample_stage.x, 0, 10, 11))   # 0, 1, 2, ..., 10
+RE(bp.scan([scaler], sample_stage.xprime, 0, 10, 11))   # 0, 1, 2, ..., 10
 
 # Relative -- start and stop are offsets from the current position:
-RE(bp.rel_scan([scaler], sample_stage.x, -1, 1, 11))
+RE(bp.rel_scan([scaler], sample_stage.xprime, -1, 1, 11))
 ```
 
 **Counting note for SPEC users:** Bluesky's `num` is the **number of
@@ -57,8 +57,8 @@ synchronously:
 ```python
 RE(bp.scan(
     [scaler],
-    sample_stage.x, 0, 10,
-    sample_stage.y, 0, 5,
+    sample_stage.xprime, 0, 10,
+    sample_stage.base_y, 0, 5,
     num=11,
 ))
 ```
@@ -73,8 +73,8 @@ nested innermost-last:
 ```python
 RE(bp.grid_scan(
     [scaler],
-    sample_stage.x, 0, 10, 11,    # outer; varies slowest
-    sample_stage.y, 0, 5, 6,      # inner; varies fastest
+    sample_stage.xprime, 0, 10, 11,    # outer; varies slowest
+    sample_stage.base_y, 0, 5, 6,      # inner; varies fastest
 ))
 ```
 
@@ -84,8 +84,8 @@ extra traverse:
 ```python
 RE(bp.grid_scan(
     [scaler],
-    sample_stage.x, 0, 10, 11,
-    sample_stage.y, 0, 5, 6,
+    sample_stage.xprime, 0, 10, 11,
+    sample_stage.base_y, 0, 5, 6,
     snake_axes=True,
 ))
 ```
@@ -97,7 +97,7 @@ that travels with the run:
 
 ```python
 RE(bp.scan(
-    [scaler], sample_stage.x, 0, 10, 11,
+    [scaler], sample_stage.xprime, 0, 10, 11,
     md={"sample": "Si(111)", "experimenter": "ECP", "purpose": "alignment"},
 ))
 ```

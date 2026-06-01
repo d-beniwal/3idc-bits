@@ -59,7 +59,7 @@ ds
 # Coordinates:
 #   * time     (time) datetime64[ns] ...
 # Data variables:
-#     sample_stage_x  (time) float64 0.0 1.0 2.0 ...
+#     sample_stage_xprime  (time) float64 0.0 1.0 2.0 ...
 #     scaler_chan01    (time) float64 1234.0 1180.0 ...
 
 ds.to_pandas()
@@ -69,7 +69,7 @@ ds["scaler_chan01"].plot()
 # matplotlib plot
 ```
 
-For single columns: `ds["sample_stage_x"]` returns an `xarray.DataArray`.
+For single columns: `ds["sample_stage_xprime"]` returns an `xarray.DataArray`.
 
 ## Metadata
 
@@ -79,7 +79,7 @@ Every run carries metadata accessible without reading the bulk data:
 run.metadata["start"]
 # {'uid': '...', 'time': 1719000000.0, 'scan_id': 1, 'plan_name': 'scan',
 #  'plan_args': {...}, 'plan_type': 'generator',
-#  'detectors': ['scaler'], 'motors': ['sample_stage_x'], 'num_points': 11,
+#  'detectors': ['scaler'], 'motors': ['sample_stage_xprime'], 'num_points': 11,
 #  ...}
 
 run.metadata["stop"]
@@ -99,8 +99,8 @@ run.baseline.read()
 # <xarray.Dataset>
 # Dimensions: (time: 2)
 # Data variables (one entry per baseline device, both at start and at end):
-#     sample_stage_x  (time) float64 ...
-#     sample_stage_y  (time) float64 ...
+#     sample_stage_xprime  (time) float64 ...
+#     sample_stage_base_y  (time) float64 ...
 #     ...
 ```
 

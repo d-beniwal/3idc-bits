@@ -35,7 +35,7 @@ style: |
 
 ## What's installed today
 
-- **Motors:** `sample_stage` (x/y/z/omega), `detector_stage` (x/y/z), `laser_optics` (us/ds)
+- **Motors:** `sample_stage` (xprime/base_y/zprime/omega), `detector_stage` (det_x/eiger_y/eiger_z), `laser_optics` (us/ds)
 - **Shutter:** `shutter` -- A-station PSS
 - **Detector:** `eiger2` -- Eiger2 500k (HDF5 plugin pending)
 - **Simulators:** `sim_motor`, `sim_det` for verification
@@ -48,8 +48,8 @@ style: |
 Plans go through `RE(...)`.  Direct ophyd calls don't.
 
 ```python
-RE(bps.mv(sample_stage.x, 12.3))   # plan -- use RE
-sample_stage.x.position             # data -- no RE
+RE(bps.mv(sample_stage.xprime, 12.3))   # plan -- use RE
+sample_stage.xprime.position             # data -- no RE
 laser_optics.is_out                 # data -- no RE
 RE(laser_optics.move_out())         # plan method -- use RE
 ```
