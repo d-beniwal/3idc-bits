@@ -113,8 +113,53 @@ jobs:
           set -vxeuo pipefail
           pip install -e .
 
-      - name: Run unit tests
+      - name: Run tests with pytest & coverage
         shell: bash -l {0}
         run: |
           set -vxeuo pipefail
-          pytest -v src/id3c/tests/
+          coverage run --concurrency=thread --parallel-mode \
+              --source=id3c -m pytest -vvv src/id3c/tests/
+          coverage combine
+          coverage report --precision 3
+
+      - name: Upload coverage data to coveralls.io
+        shell: bash -l {0}
+        run: |
+          set -vxeuo pipefail
+          micromamba list coveralls
+          which coveralls
+          coveralls debug
+          if [ "${GITHUB_TOKEN}" != "" ]; then
+            # only upload from GitHub runner
+            coveralls --service=github
+          else
+            echo "No credentials for upload to coveralls."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERALLS_FLAG_NAME: ${{ matrix.python-version }}
+          COVERALLS_PARALLEL: true
+
+  # https://coveralls-python.readthedocs.io/en/latest/usage/configuration.html#github-actions-support
+  coveralls:
+    name: Report unit test coverage to coveralls
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    container: python:3-slim
+
+    steps:
+      - name: Gather coverage and report to Coveralls
+        run: |
+          set -vxeuo pipefail
+          echo "Finally!"
+          pip3 install --upgrade coveralls
+          # debug mode: output prepared json and reported files list to stdout
+          # https://coveralls-python.readthedocs.io/en/latest/troubleshooting.html
+          coveralls debug
+          if [ "${GITHUB_TOKEN}" != "" ]; then
+            coveralls --service=github --finish
+          else
+            echo "No credentials for upload to coveralls."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
