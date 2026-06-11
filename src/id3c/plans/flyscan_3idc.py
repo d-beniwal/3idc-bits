@@ -2,104 +2,55 @@
 
 Fly scan an EPICS motor and collect Eiger2 (or any AreaDetector) images.
 
-Implementation note: this plan is software-correlated (no hardware
-gate signal). Frame-to-position pairing happens downstream from
-the ``monitor_during_decorator`` streams, joined by IOC timestamp.
-Waits inside the plan use ophyd ``Status`` objects (``MoveStatus``,
-``SubscriptionStatus``, ``AndStatus``) driven by CA monitor
-callbacks rather than busy-poll loops. See ``flyscan-3idc-status-
-strategy.md`` (alongside this file) for the design history.
+Usage
+-----
 
-Usage from a command-line session::
+From a command-line session::
 
-    from bits2606.startup import *           # provides RE, oregistry, etc.
-    from flyscan_3idc import flyscan, configure_adsimdet
+    from id3c.startup import *           # provides RE, oregistry, etc.
 
     # The plan: drive a fly scan and record a Bluesky run.
-    uid, = RE(
-        flyscan(
-            det_name: str = "eiger2",
-            flymotor_name: str = "sample_stage.omega",
-            p_start=5, p_end=10,
-            exposures_per_egu=10,  # approximate
-            t_period=0.05,
-        )
-    )
-
-    # The standalone diagnostic: exercise the AD acquisition
-    # protocol (no plan, no RunEngine) for triage.
-    result = configure_adsimdet(adsimdet, capture_duration=3.0)
+    uid, = RE(flyscan(p_start=0, p_end=5, exposures_per_egu=10, t_period=0.05))
 
 General outline
 ---------------
 1. Preparation
-   1. Validate input parameters
-   2. Collect metadata
-   3. Snapshot mutable state (``stage_sigs``, ``kind``,
-      overridden signal values) for later restore
-   4. concurrently (motor moves while parameters are set)
-      1. send motor to *initial* position (``bps.abs_set(...,
-         group="taxi")``)
-      2. set *most* parameters for scan
-      3. wait for motor to reach taxi position
-         (``bps.wait(group="taxi")``)
-   5. set motor velocity for scan
+   - validate inputs
+   - collect metadata
+   - snapshot anything we will modify, so we can restore it later
+   - taxi the motor (at current velocity) to a position just
+     before *p_start*
 2. Kickoff
-   1. stage devices
-   2. open run
-   3. subscribe to bespoke monitor streams (one stream per signal):
-      1. HDF writer's frame count (``det.hdf1.array_counter``,
-         carries EPICS timestamp for downstream sync with flymotor)
-      2. camera's frame count (``det.cam.array_counter``, for
-         cam-vs-HDF latency comparison)
-      3. motor position (``flymotor.user_readback``)
-   4. send motor to *final* position (``bps.abs_set(...,
-      group="scan")``)
-   5. start detector acquiring (without a hardware gate signal,
-      coordinating acquire-start to a specific motor position is
-      extremely difficult; instead, acquire **continuously** for
-      the entire span ``p_initial <= flymotor.position <= p_final``
-      and let downstream analysis select frames in
-      ``[p_start, p_end]`` by timestamp/position).  This is an
-      intentional oversample.
-   6. build status objects for the monitor stage:
-      - ``cam_stopped_status``: ``cam.acquire == 0``
-      - ``drain_status``: HDF queue empty and idle
-      - ``hdf_drain_status = AndStatus(cam_stopped_status,
-        drain_status)`` — scan is done when both
-      - ``watchdog_status``: ``num_captured > 0`` with
-        ``timeout=no_frames_timeout``
-3. Monitor (``monitor_loop``)
-   1. CA monitor callback on ``det.hdf1.num_captured`` pushes
-      ``(timestamp, value)`` onto a bounded queue (the *producer*)
-   2. plan-side *consumer* wakes every ``_consumer_tick`` seconds,
-      drains the queue, and emits one ``primary`` event per
-      newly-captured frame (``create / read(det) / read(flymotor)
-      / save``).  ``bps.read`` returns cached monitor values — no
-      extra CA traffic
-   3. stop detector acquiring when motor crosses *p_end*
-   4. raise ``RuntimeError`` if the watchdog times out without any
-      frame arriving (RE will then STOP all in-motion movables)
-   5. exit when ``hdf_drain_status.done`` (cam has stopped AND
-      every in-flight frame has been flushed)
-   6. after exit, ``bps.wait(group="scan")`` absorbs any motor
-      settling past *p_final*
-4. Conclusion (``_cleanup``)
-   1. stop motor (if still moving — checked via ``motor_is_moving``)
-   2. stop cam acquire
-   3. stop hdf1 capture
-   4. wait for cam idle AND HDF queue drained
-      (``wait_for_acquire_drained`` — uses ``AndStatus`` of
-      ``SubscriptionStatus`` per signal)
-   5. verify the HDF5 file landed (``full_file_name``)
-   6. restore overridden signal values from ``CacheParameters``,
-      restore mutated ``stage_sigs`` dicts, restore mutated
-      ``kind`` values
-   7. close run (handled by ``run_decorator``)
-   8. unstage devices (handled by ``stage_decorator``)
+   - stage the detector
+   - open the run
+   - start the detector acquiring continuously
+   - launch the motor toward (actually past) *p_end* (at computed
+     flyscan velocity)
+3. Monitor
+   - report one event per captured frame in the ``primary`` stream
+   - once the motor crosses *p_end*, stop the detector image
+     acquisitions and the motor movement
+4. Conclusion
+   - close the run
+   - drain the detector pipeline
+   - verify the HDF5 file landed
+   - select the in-scan subset by position and write it to the
+     HDF5/NeXus master file
+   - restore everything snapshotted in step 1
+
+Implementation note: this plan is software-correlated (no hardware
+gate or trigger signal). Frame-to-position pairing happens downstream
+from the ``monitor_during_decorator`` streams, joined by IOC timestamp.
+Waits inside the plan use ophyd ``Status`` objects (``MoveStatus``,
+``SubscriptionStatus``, ``AndStatus``) driven by CA monitor
+callbacks rather than busy-poll loops.
+
+The ``hdf_t_phase_offset`` kwarg is an IOC/detector-specific
+calibration constant; measure it once with
+``flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic`` (see
+that function's docstring for the procedure).
 """
 
-import inspect
 import logging
 import queue
 import time
@@ -109,6 +60,7 @@ from dataclasses import dataclass
 from apsbits.core.instrument_init import oregistry
 from bluesky import plan_stubs as bps
 from bluesky import preprocessors as bpp
+from bluesky.utils import FailedStatus
 from bluesky.utils import plan as bluesky_plan
 from epics import caget
 from ophyd import ADBase
@@ -117,6 +69,10 @@ from ophyd import Kind
 from ophyd.status import AndStatus
 from ophyd.status import SubscriptionStatus
 from ophyd.utils.errors import WaitTimeoutError
+
+AD_FILES_ROOT = "./ad_files/"  # MUST be a relative (not absolute) path
+"""soft link in PWD on this workstation to IOC's root path"""
+# TODO: instead, what about det.hdf1.{read,write}_path_template attributes?
 
 logger = logging.getLogger(__name__)
 # Default the module's own logger to INFO so diagnostics show up in a
@@ -127,7 +83,7 @@ logger = logging.getLogger(__name__)
 # handler on the root logger), our records will propagate to it.  If
 # nothing is configured at all, attach a minimal handler so messages
 # still reach the terminal.
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 if not logger.handlers and not logging.getLogger().handlers:
     _h = logging.StreamHandler()
     _h.setFormatter(
@@ -376,7 +332,7 @@ def check_hdf_file_path(det, settle_timeout=1.0):
             lambda value: value == 1,
             timeout=settle_timeout,
         )
-    except WaitTimeoutError as err:
+    except WaitTimeoutError as exc:
         exists = det.hdf1.file_path_exists.get(use_monitor=False)
         current_path = det.hdf1.file_path.get(use_monitor=False)
         msg = (
@@ -388,7 +344,7 @@ def check_hdf_file_path(det, settle_timeout=1.0):
             f" inside the IOC, or correct ad_file_path."
         )
         logger.error(msg)
-        raise RuntimeError(msg) from err
+        raise RuntimeError(msg) from exc
 
     current_path = det.hdf1.file_path.get(use_monitor=False)
     logger.info(
@@ -887,6 +843,7 @@ def validate_flyscan_inputs(
     t_acquire,
     t_period,
     compression,
+    velocity_minimum=None,
 ):
     """Validate flyscan arguments against derived geometry and IOC state.
 
@@ -896,9 +853,43 @@ def validate_flyscan_inputs(
     cross-checked against the motor's velocity limits / the HDF
     plugin's compression enum.
 
-    Returns ``(v_max, v_base)`` for inclusion in run metadata.
+    Velocity-bracket policy (per user spec, flyscan_3idc.py:94-102)::
+
+        v_max = .VELO                         # the motor's currently
+                                              # configured target velocity
+                                              # is the ceiling for the
+                                              # flyscan.  .VMAX is not used
+                                              # as the cap (an unset
+                                              # .VMAX == 0 in EPICS means
+                                              # "no limit", and the user
+                                              # specifically wants .VELO
+                                              # to govern).
+        v_min = max(.VBAS, velocity_minimum)  # honour both the IOC's
+                                              # posted base velocity and
+                                              # any user-supplied floor.
+
+    Then validate: ``v_min <= geometry.scan_velocity <= v_max``.
+
+    ``.VELO`` is required; if it cannot be read, this function raises
+    ``ValueError`` (we refuse to run a flyscan without a known velocity
+    ceiling).
+
+    Returns the 5-tuple ``(v_velo, v_vmax, v_vbas, v_max, v_min)``:
+
+    - ``v_velo``: raw ``.VELO`` (always present; equal to ``v_max``).
+    - ``v_vmax``: raw ``.VMAX`` (``None`` or ``0`` if not posted by IOC).
+    - ``v_vbas``: raw ``.VBAS`` (``None`` or ``0`` if not posted by IOC).
+    - ``v_max``: effective ceiling used for the bracket check.
+    - ``v_min``: effective floor used for the bracket check.
+
+    All five are recorded in run metadata by ``build_flyscan_md`` so
+    downstream analysis can tell raw IOC limits apart from the
+    effective bracket the plan chose.
+
     Raises ``KeyError`` for missing/wrong-type devices and ``ValueError``
-    for out-of-range numeric arguments or an unsupported compression.
+    for out-of-range numeric arguments, an unsupported compression, an
+    unreadable ``.VELO``, or a ``scan_velocity`` outside the effective
+    ``[v_min, v_max]`` bracket.
     """
     if not isinstance(det, ADBase):
         raise KeyError(f"Area Detector {det_name!r} not found in registry.")
@@ -924,20 +915,48 @@ def validate_flyscan_inputs(
         )
     if geometry.scan_velocity <= 0:
         raise ValueError(f"scan_velocity={geometry.scan_velocity:g} must be positive.")
+    if velocity_minimum is not None and velocity_minimum < 0:
+        raise ValueError(f"velocity_minimum={velocity_minimum:g} must be non-negative.")
 
-    # EpicsMotor does not expose .VMAX or .VBAS as components.
-    # Read ad-hoc; None or 0 means "no limit on that side."
-    v_max = read_motor_field(flymotor, ".VMAX")
-    v_base = read_motor_field(flymotor, ".VBAS")
-    if v_max is not None and v_max > 0 and geometry.scan_velocity > v_max:
+    # EpicsMotor does not expose .VELO / .VMAX / .VBAS as components.
+    # Read ad-hoc; for .VMAX / .VBAS, None or 0 means "no limit on that
+    # side" (matches EPICS convention).  .VELO is required: it is the
+    # ceiling for the flyscan, and we refuse to run without one.
+    v_velo = read_motor_field(flymotor, ".VELO")
+    v_vmax = read_motor_field(flymotor, ".VMAX")
+    v_vbas = read_motor_field(flymotor, ".VBAS")
+    if v_velo is None or v_velo <= 0:
         raise ValueError(
-            f"scan_velocity={geometry.scan_velocity:g} exceeds motor max"
-            f" velocity .VMAX={v_max:g} for {flymotor_name!r}."
+            f"Cannot determine velocity ceiling for {flymotor_name!r}:"
+            f" .VELO unreadable or non-positive (got {v_velo!r})."
         )
-    if v_base is not None and v_base > 0 and geometry.scan_velocity < v_base:
+
+    # Effective ceiling: per user spec, .VELO is the cap (independent
+    # of .VMAX).  The TODO-formula MIN(VELO, MAX(VMAX, VELO)) reduces
+    # to VELO in all cases — both branches of MAX yield a value >= VELO,
+    # so MIN with VELO gives VELO.
+    v_max = float(v_velo)
+
+    # Effective floor: start with .VBAS (None/0 sentinel => no IOC
+    # floor), then lift by velocity_minimum if the user supplied one.
+    v_min = float(v_vbas) if (v_vbas is not None and v_vbas > 0) else 0.0
+    if velocity_minimum is not None:
+        v_min = max(v_min, float(velocity_minimum))
+
+    # Bracket check: v_min <= scan_velocity <= v_max.  Compare against
+    # the effective bracket and surface the underlying inputs in the
+    # error message so the user can tell which knob to turn.
+    if geometry.scan_velocity > v_max:
         raise ValueError(
-            f"scan_velocity={geometry.scan_velocity:g} is below motor"
-            f" base velocity .VBAS={v_base:g} for {flymotor_name!r}."
+            f"scan_velocity={geometry.scan_velocity:g} exceeds motor"
+            f" .VELO={v_velo:g} (effective v_max={v_max:g}) for"
+            f" {flymotor_name!r}."
+        )
+    if v_min > 0 and geometry.scan_velocity < v_min:
+        raise ValueError(
+            f"scan_velocity={geometry.scan_velocity:g} is below effective"
+            f" v_min={v_min:g} (.VBAS={v_vbas!r}, velocity_minimum="
+            f"{velocity_minimum!r}) for {flymotor_name!r}."
         )
 
     # Compression validation against the HDF plugin's enum_strs.  The
@@ -964,7 +983,9 @@ def validate_flyscan_inputs(
     logger.info(
         "validated inputs: det=%r flymotor=%r p=%g/%g/%g/%g num_frames=%d"
         " t_acquire=%g t_period=%g scan_active_duration=%g"
-        " scan_velocity=%g (VMAX=%r VBAS=%r) compression=%r",
+        " scan_velocity=%g (VELO=%r VMAX=%r VBAS=%r ->"
+        " effective v_max=%g v_min=%g, velocity_minimum=%r)"
+        " compression=%r",
         det_name,
         flymotor_name,
         geometry.p_initial,
@@ -976,11 +997,15 @@ def validate_flyscan_inputs(
         t_period,
         geometry.scan_duration,
         geometry.scan_velocity,
+        v_velo,
+        v_vmax,
+        v_vbas,
         v_max,
-        v_base,
+        v_min,
+        velocity_minimum,
         compression,
     )
-    return v_max, v_base
+    return v_velo, v_vmax, v_vbas, v_max, v_min
 
 
 def build_flyscan_md(
@@ -996,13 +1021,19 @@ def build_flyscan_md(
     taxi_allowance,
     compression,
     geometry,
+    v_velo,
+    v_vmax,
+    v_vbas,
     v_max,
-    v_base,
+    v_min,
+    velocity_minimum,
     ad_file_name,
     ad_file_path,
     hdf_num_capture,
     hdf_flush_timeout_max,
     consumer_tick,
+    hdf_t_phase_offset,
+    detector_names=(),
 ):
     """Assemble the metadata dict recorded with the run.
 
@@ -1013,8 +1044,118 @@ def build_flyscan_md(
     have both the user-supplied inputs and the resulting plan.
     Internal underscore-prefixed kwargs (e.g. ``_consumer_tick``)
     appear without the underscore in the metadata for readability.
-    """
+
+    ``plan_name`` is recorded explicitly here (defaulting to
+    ``"flyscan"`` in the calling ``flyscan(...)`` plan).  We cannot
+    rely on bluesky's ``RunEngine`` start-doc auto-derivation
+    (``getattr(self._plan, "__name__", "")``) because the
+    ``@bluesky.utils.plan`` decorator wraps the generator in a
+    ``Plan`` class instance with no ``__name__`` attribute, so the
+    auto-derived value is the empty string.  Empirically confirmed
+    on 2026-06-10 against bluesky's current ``Plan`` implementation
+    (``__slots__ = ("_iter", "_stack")`` — no ``__name__`` slot).
+    Wrapper plans should pass their own name via ``flyscan(...,
+    plan_name="my_wrapper_name", ...)`` so the run's provenance
+    reflects the wrapper, not the inner flyscan call.
+
+    ``None``-substitution policy
+    ----------------------------
+
+    Every value in the returned dict is HDF5-serialisable: no ``None``
+    values escape this function.  This matters because
+    ``apstools.callbacks.nexus_writer.NXWriter.write_metadata`` runs
+    ``h5py.Group.create_dataset(k, data=v)`` on each item, and
+    ``data=None`` raises ``TypeError: One of data, shape or dtype
+    must be specified`` (verified on the gp:m1 + adsimdet IOC at
+    11:05:25, 2026-06-10 — see ``flyscan_3idc_notes.md``).
+
+    For each input that may be ``None``, we substitute the value the
+    validator / plan effectively used in its place, and record a
+    sibling boolean so the provenance (real value vs substituted
+    default) is recoverable from metadata.  Symmetric with the
+    existing ``motor_accl_was_default`` pattern:
+
+    +----------------------------------+--------------------+-----------------------------------+
+    | metadata key                     | None substitute    | companion boolean                 |
+    +==================================+====================+===================================+
+    | ``motor_velocity_max_raw``       | ``float('nan')``   | ``motor_velocity_max_was_unreadable`` |
+    | ``motor_velocity_base_raw``      | ``float('nan')``   | ``motor_velocity_base_was_unreadable`` |
+    | ``velocity_minimum_requested``   | ``0.0``            | ``velocity_minimum_was_default``  |
+    +----------------------------------+--------------------+-----------------------------------+
+
+    Rationale per key:
+
+    - ``.VMAX`` / ``.VBAS``: ``read_motor_field`` returns ``None`` when
+      the PV can't be read within its 1.0s timeout.  ``NaN`` is the
+      truthful "unknown" sentinel — it remains distinguishable from
+      ``0.0`` (which the EPICS motor record uses to mean "no
+      IOC-posted limit on that side").  ``NaN`` is a first-class
+      float64 value that h5py serialises natively.
+    - ``velocity_minimum``: when the user passes ``None`` (the
+      default), the validator's effective floor is
+      ``max(.VBAS, 0)``, i.e. the kwarg contributes nothing to
+      ``v_min``.  Recording ``0.0`` truthfully represents what the
+      plan actually used.
+
+    Velocity-related metadata keys (post-substitution):
+
+    - ``motor_velo``: raw ``.VELO`` at scan start (= ``effective_v_max``);
+      always present (validator raises if ``.VELO`` is unreadable).
+    - ``motor_velocity_max_raw``: raw ``.VMAX`` (informational only;
+      the plan does NOT use this as the cap); ``NaN`` if unreadable
+      (companion bool: ``motor_velocity_max_was_unreadable``).  A
+      finite ``0.0`` here means the IOC posted 0, which in EPICS
+      convention means "no hardware max" — different from NaN.
+    - ``motor_velocity_base_raw``: raw ``.VBAS`` (informational);
+      ``NaN`` if unreadable (companion bool:
+      ``motor_velocity_base_was_unreadable``).  A finite ``0.0``
+      here means the IOC posted 0 (no hardware base).
+    - ``effective_v_max``: ceiling actually used to validate
+      ``scan_velocity`` (= ``motor_velo``).
+    - ``effective_v_min``: floor actually used (= ``max(.VBAS,
+      velocity_minimum_or_0)``).
+    - ``velocity_minimum_requested``: the ``velocity_minimum`` kwarg
+      as the user supplied it; ``0.0`` if the user passed ``None``
+      (companion bool: ``velocity_minimum_was_default``).
+    - ``velocity_minimum_was_default``: ``True`` iff the user did
+      not supply ``velocity_minimum`` (and the recorded
+      ``velocity_minimum_requested = 0.0`` is the substituted
+      default, not an explicit user choice).
+
+    Other metadata:
+
+    - ``hdf_t_phase_offset``: seconds to add to each
+      ``hdf1.array_counter`` monitor-stream timestamp to obtain the
+      corresponding frame's start-of-acquire moment.  Consumed by
+      ``flyscan_3idc_analysis.pair_frames_to_positions`` for
+      per-frame motor-position interpolation at the three
+      meaningful per-period phases (start_acquire, end_acquire,
+      end_period).  Defaults to ``-t_acquire`` in the calling
+      ``flyscan(...)`` plan (the Phase 0 verdict for the
+      gp:m1 + adsimdet IOC; see ``flyscan_3idc_notes.md``).  Pass
+      a per-call override if your IOC's HDF plugin timestamps
+      counter events at a different phase.
+    """  # noqa E501
+    # Substitute h5py-serialisable defaults for any None values, and
+    # record companion booleans preserving the provenance.  See the
+    # docstring for the full policy + rationale.
+    motor_velocity_max_was_unreadable = v_vmax is None
+    v_vmax_md = float("nan") if motor_velocity_max_was_unreadable else float(v_vmax)
+
+    motor_velocity_base_was_unreadable = v_vbas is None
+    v_vbas_md = float("nan") if motor_velocity_base_was_unreadable else float(v_vbas)
+
+    velocity_minimum_was_default = velocity_minimum is None
+    velocity_minimum_md = (
+        0.0 if velocity_minimum_was_default else float(velocity_minimum)
+    )
+
     return {
+        # plan_name comes in as an explicit kwarg from flyscan() (default
+        # "flyscan"; wrappers override).  We can't let bluesky auto-derive
+        # it because @bluesky_plan wraps the generator in a Plan() class
+        # that has no __name__ attribute (bluesky's
+        # getattr(self._plan, "__name__", "") returns "").
         "plan_name": plan_name,
         "det_name": det_name,
         "flymotor_name": flymotor_name,
@@ -1036,14 +1177,35 @@ def build_flyscan_md(
         "motor_accl": geometry.motor_accl,
         "motor_accl_was_default": geometry.accl_was_default,
         "motor_egu": geometry.motor_egu,
-        "motor_velocity_max": v_max,  # .VMAX; None if not readable
-        "motor_velocity_base": v_base,  # .VBAS; None if not readable
+        # Velocity bounds: raw IOC values (None -> NaN) + effective
+        # bracket used + provenance booleans.  See docstring for the
+        # full substitution policy.
+        "motor_velo": v_velo,  # .VELO (always present)
+        "motor_velocity_max_raw": v_vmax_md,  # .VMAX; NaN if unreadable
+        "motor_velocity_max_was_unreadable": motor_velocity_max_was_unreadable,
+        "motor_velocity_base_raw": v_vbas_md,  # .VBAS; NaN if unreadable
+        "motor_velocity_base_was_unreadable": motor_velocity_base_was_unreadable,
+        "effective_v_max": v_max,  # ceiling used (= .VELO)
+        "effective_v_min": v_min,  # floor used
+        "velocity_minimum_requested": velocity_minimum_md,  # 0.0 if user passed None
+        "velocity_minimum_was_default": velocity_minimum_was_default,
         # File destination
         "ad_file_name": ad_file_name,
         "ad_file_path": ad_file_path,
         "hdf_num_capture": hdf_num_capture,  # HDF plugin upper bound
         "hdf_flush_timeout_max": hdf_flush_timeout_max,  # worst-case (s)
         "consumer_tick": consumer_tick,  # monitor_loop wake-up tick (s)
+        # Phase offset (seconds) from each hdf_t monitor timestamp to
+        # the corresponding frame's start-of-acquire moment.  Used by
+        # flyscan_3idc_analysis.pair_frames_to_positions to compute
+        # per-frame start_acquire / end_acquire / end_period
+        # timestamps.  See flyscan_3idc_notes.md "Phase 0 verdict"
+        # for how the default (-t_acquire on gp:m1 + adsimdet) was
+        # determined.  Per-call overridable via flyscan(...,
+        # hdf_t_phase_offset=...).
+        "hdf_t_phase_offset": hdf_t_phase_offset,
+        # Names of any extra readables passed to flyscan(detectors=).
+        "detector_names": list(detector_names),
     }
 
 
@@ -1414,7 +1576,15 @@ def wait_for_acquire_drained(det, poll=0.001, timeout=10.0):
 
 
 def monitor_loop(
-    flymotor, det, p_end, *, exit_when, watchdog=None, tick=_CONSUMER_TICK_DEFAULT
+    flymotor,
+    det,
+    p_end,
+    *,
+    exit_when,
+    watchdog=None,
+    tick=_CONSUMER_TICK_DEFAULT,
+    motor_stopped_flag=None,
+    extra_readables=(),
 ):
     """Plan stub: emit one primary-stream event per HDF frame written.
 
@@ -1438,11 +1608,31 @@ def monitor_loop(
     not the system of record, and uses the cached monitor values
     (no extra CA traffic).
 
-    When the motor's readback crosses ``p_end``, the cam is told to
-    stop (``bps.mv(det.cam.acquire, 0)``).  This check happens on
-    each consumer tick (per Phase 3 decision 3.6 — overshoot is
-    dominated by the motor record's ~10 Hz update rate, not by the
-    tick).
+    When the motor's readback crosses ``p_end``, two stop actions
+    fire in sequence on the same tick:
+
+    1. ``bps.mv(det.cam.acquire, 0)`` tells the cam to stop.
+    2. ``bps.stop(flymotor)`` issues a controlled stop on the
+       motor.  For an ``EpicsMotor`` this writes the motor record's
+       ``.STOP`` field, which decelerates the motor at ``.ACCL``
+       (a normal controlled ramp-down, not an emergency stop) so
+       it comes to rest somewhere between ``p_end`` and
+       ``p_final``.  This avoids wasting motion (and the
+       associated coast time) traversing all the way to the
+       conservatively-chosen ``p_final``.
+
+    The motor stop has a side effect: the ``MoveStatus`` previously
+    registered with the RunEngine by
+    ``bps.abs_set(flymotor, p_final, group="scan")`` completes with
+    ``success=False`` once the motor's stop callback fires.  Callers
+    that ``bps.wait(group="scan")`` after ``monitor_loop`` must be
+    prepared for that wait to raise ``bluesky.utils.FailedStatus``;
+    pass a ``motor_stopped_flag`` (see below) to discriminate
+    "stopped on purpose" from "stopped because something else broke."
+
+    This check happens on each consumer tick (per Phase 3 decision
+    3.6 — overshoot is dominated by the motor record's ~10 Hz
+    update rate, not by the tick).
 
     Exit: ``exit_when.done``.  Per Phase 3 decisions 3.8 / 3.B, the
     caller constructs ``exit_when`` as
@@ -1483,6 +1673,16 @@ def monitor_loop(
     tick : float
         Consumer wake-up tick in seconds.  See module-level
         ``_CONSUMER_TICK_DEFAULT``.
+    motor_stopped_flag : list of one bool, optional
+        If supplied, set ``motor_stopped_flag[0] = True`` after the
+        ``bps.stop(flymotor)`` call at the ``p_end`` crossing.  The
+        caller uses this to discriminate the expected ``FailedStatus``
+        from the now-failed scan-group ``MoveStatus`` (which the
+        caller can swallow) from any other ``FailedStatus`` (which
+        should propagate).  None disables this signal (and the
+        caller will have no way to tell the two cases apart — only
+        valid if the caller doesn't ``bps.wait`` on a motor-related
+        group after the loop).
     """
     # --- Producer setup: CA monitor callback into a bounded queue ---
     frame_queue = queue.Queue(maxsize=_FRAME_QUEUE_SIZE)
@@ -1539,15 +1739,32 @@ def monitor_loop(
                 n_drained,
                 flymotor.user_readback.get(use_monitor=False),
             )
+            # det + flymotor + any user-supplied extra readables.
+            readables = [det, flymotor, *extra_readables]
             for _ in range(n_new):
                 yield from bps.create(name="primary")
-                yield from bps.read(det)
-                yield from bps.read(flymotor)
+                for obj in readables:
+                    yield from bps.read(obj)
                 yield from bps.save()
         return highest
 
     def _check_p_end_crossing(acquire_stopped, last_captured):
-        """Stop the cam if the motor has crossed p_end."""
+        """Stop the cam *and* the motor if the motor has crossed p_end.
+
+        Ordering: cam first, motor second.  Stopping the cam is the
+        immediate priority for ending the acquisition window cleanly;
+        the motor's deceleration ramp can run in parallel with the
+        HDF drain that follows.
+
+        Motor stop is a normal controlled stop (``EpicsMotor.stop()``
+        writes the motor record's ``.STOP`` field, which decelerates
+        at ``.ACCL`` — not an emergency stop).  The motor will come
+        to rest somewhere past ``p_end`` (within one deceleration
+        distance, ~``0.5 * scan_velocity * .ACCL``) rather than
+        coasting all the way to ``p_final``.  This is what the
+        caller wanted; ``p_final`` was always a conservative upper
+        bound, not a target.
+        """
         if acquire_stopped:
             return acquire_stopped
         # Bypass cache for the position read — pairing timing matters
@@ -1555,11 +1772,18 @@ def monitor_loop(
         if flymotor.user_readback.get(use_monitor=False) >= p_end:
             logger.info(
                 "monitor_loop: motor crossed p_end (%g); stopping acquire"
-                " at num_captured=%d",
+                " and motor at num_captured=%d",
                 p_end,
                 last_captured,
             )
             yield from bps.mv(det.cam.acquire, 0)
+            # Controlled stop on the motor: decelerates at .ACCL, then
+            # the registered scan-group MoveStatus will fire with
+            # success=False.  See monitor_loop docstring + the
+            # try/except wrapping bps.wait(group="scan") in the caller.
+            yield from bps.stop(flymotor)
+            if motor_stopped_flag is not None:
+                motor_stopped_flag[0] = True
             return True
         return acquire_stopped
 
@@ -1647,6 +1871,9 @@ def monitor_loop(
 
 @bluesky_plan
 def flyscan(
+    # Extra readables, reported each frame.  Self-updating only:
+    # the plan does NOT call .trigger() on these.
+    detectors: list = None,
     det_name: str = "adsimdet",
     flymotor_name: str = "m1",
     p_start: float = 0,
@@ -1658,8 +1885,34 @@ def flyscan(
     compression: str = "zlib",
     ad_file_name: str = "flyscan",
     ad_file_path: str = "/tmp/flyscan",
+    # Effective scan-velocity floor is max(.VBAS, velocity_minimum);
+    # leaving this at None defers to .VBAS alone.  See
+    # validate_flyscan_inputs for the bracket policy.
+    velocity_minimum: float = None,
+    # plan_name appears in the run's start document and in the NeXus
+    # master file.  Wrapper plans should pass their own name here
+    # (e.g. plan_name="my_3idc_scan") so the run's provenance
+    # reflects the wrapper, not the inner flyscan() call.  We can't
+    # rely on bluesky's RunEngine auto-derivation
+    # (getattr(plan, "__name__", "")) because the @bluesky_plan
+    # decorator wraps the generator in a Plan() class instance that
+    # has no __name__ attribute — that path yields plan_name=""
+    # (empirically confirmed 2026-06-10; see flyscan_3idc_notes.md).
+    plan_name: str = "flyscan",
+    # Seconds to add to each hdf1.array_counter monitor-stream
+    # timestamp to obtain the corresponding frame's
+    # start-of-acquire moment.  None (the default) means "use
+    # -t_acquire" -- the Phase 0 verdict for the gp:m1 +
+    # adsimdet IOC: hdf_t timestamps each event at ~end_acquire,
+    # so start_acquire = hdf_t - t_acquire.  See
+    # flyscan_3idc_notes.md for the empirical derivation and
+    # flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic
+    # for how to determine the right value on a different IOC.
+    # Per-call override for IOCs/detectors with different HDF
+    # plugin timestamp semantics.
+    hdf_t_phase_offset: float = None,
     # TODO: trigger mode?
-    # internal parameters
+    # ------------------------------- internal parameters
     # Wake-up tick for monitor_loop's consumer (Phase 3).  CA
     # monitor callbacks update status flags asynchronously; the
     # plan wakes up every _consumer_tick seconds to check them.
@@ -1678,47 +1931,57 @@ def flyscan(
     # and watch the post-scan warning fire.  Not for production
     # data collection.
     _force_hdf_nonblocking: bool = False,
-    # user-supplied metadata is always last
+    # ------------------------------- user-supplied metadata: always last
     md: dict = None,
 ):
-    """Fly scan: move motor through range continuously acquiring detector frames.
+    """Fly scan: move motor through range while acquiring detector frames.
 
-    The motor traverses ``p_initial → p_final``, maintaining constant velocity
-    between ``p_start → p_end`` to deliver ``num_frames`` frames within
-    ``[p_start, p_end]``.  ``p_initial`` and ``p_final`` are computed from
-    ``p_start``, ``p_end``, the motor's ``.ACCL``, and ``taxi_allowance``;
-    ``num_frames`` is computed from ``(p_end - p_start) * exposures_per_egu``.
-    Detector frames are acquired continuously during the traverse;
-    downstream processing trims the data to ``[p_start, p_end]`` by motor
-    position.  An HDF5 file containing every captured frame is written next
-    to the run (the path is in the run metadata under ``ad_file_path`` /
+    The motor traverses ``p_initial → ≤ p_final``, maintaining constant
+    velocity between ``p_start → p_end`` to deliver ``num_frames`` frames
+    within ``[p_start, p_end]``.  ``p_initial`` and ``p_final`` are computed
+    from ``p_start``, ``p_end``, the motor's ``.ACCL``, and
+    ``taxi_allowance``; ``num_frames`` is computed from
+    ``(p_end - p_start) * exposures_per_egu``.  Detector frames are
+    acquired continuously during the traverse; downstream processing
+    trims the data to ``[p_start, p_end]`` by motor position.  An HDF5
+    file containing every captured frame is written next to the run
+    (the path is in the run metadata under ``ad_file_path`` /
     ``ad_file_name``).
 
     Position geometry
     -----------------
 
     User-supplied: ``p_start`` and ``p_end`` (in-scan range).  Derived:
-    ``p_initial`` (parked, pre-scan) and ``p_final`` (coast, post-scan)::
+    ``p_initial`` (parked, pre-scan) and ``p_final`` (a conservative
+    upper bound the motor is almost never actually allowed to reach —
+    see below)::
 
         p_initial  <  p_start  <  p_end  <  p_final
         |             |          |          |
         |             |--scan----|          |
-        |--taxi-in---|           |---coast--|
+        |--taxi-in---|           |--stop----|
 
     - ``p_start``: the position at which the first useful frame should
       be captured.  Downstream processing trims frames captured before
       this point.
     - ``p_end``: the position at which the last useful frame should be
-      captured.  The plan stops the cam when the motor passes this point.
+      captured.  When the motor crosses this point, the plan stops the
+      cam (no more frames) *and* issues a controlled stop on the motor
+      (decelerates at ``.ACCL``).  The motor comes to rest somewhere
+      between ``p_end`` and ``p_final``, within roughly one deceleration
+      distance (``≈ 0.5 * scan_velocity * .ACCL``) past ``p_end``.
     - ``p_initial`` (derived): where the motor is parked before the
       scan, far enough below ``p_start`` that the motor reaches its
       scan velocity *before* it enters the acquisition region.
       Computed as ``p_start - d_taxi - taxi_allowance`` where
       ``d_taxi = 0.5 * scan_velocity * motor.ACCL``.
-    - ``p_final`` (derived): where the motor coasts to after the scan
-      ends — far enough above ``p_end`` that the cam can finish
-      processing its last frames before the motor stops.  Computed
-      symmetric to ``p_initial``.
+    - ``p_final`` (derived): the conservative upper bound used as the
+      *target* of the scan move (``bps.abs_set(flymotor, p_final,
+      group="scan")``).  The plan stops the motor before it reaches
+      ``p_final`` — this target only matters as a "should never be
+      exceeded" sentinel and as a fallback stopping point if something
+      prevents the planned controlled stop.  Computed symmetric to
+      ``p_initial``.
 
     ``taxi_allowance`` (default ``0.5``, in motor EGU) is added to both
     ends as a slack margin on top of the acceleration-based distance.
@@ -1743,8 +2006,18 @@ def flyscan(
       ``0 < t_acquire <= t_period``.
 
     The scan velocity is computed as ``(p_end - p_start) / (num_frames
-    * t_period)``.  Pre-scan validation rejects velocities outside the
-    motor's ``.VBAS`` / ``.VMAX`` limits with a clear ``ValueError``.
+    * t_period)``.  Pre-scan validation requires it to fall in the
+    bracket ``v_min <= scan_velocity <= v_max`` where:
+
+    - ``v_max`` is the motor's currently-configured ``.VELO`` (the
+      operator's chosen target velocity governs the ceiling — ``.VMAX``
+      is recorded as metadata but not used as the cap).  ``.VELO`` must
+      be readable; if it isn't, the plan refuses to run.
+    - ``v_min`` is ``max(.VBAS, velocity_minimum)``, where
+      ``velocity_minimum`` is the kwarg below (``None`` ⇒ floor is
+      ``.VBAS`` alone).
+
+    The motor's pre-run ``.VELO`` is automatically restored at scan end.
 
     Detector & file
     ---------------
@@ -1787,20 +2060,24 @@ def flyscan(
     - A ``baseline`` stream (whatever ``apsbits`` configures).
     - Metadata under ``start``: user-supplied scan parameters
       (``p_start``, ``p_end``, ``exposures_per_egu``, ``t_period``,
-      ``t_acquire``, ``taxi_allowance``, ``compression``), derived
-      geometry (``p_initial``, ``p_final``, ``num_frames``,
-      ``scan_velocity``, ``d_taxi``, ``motor_accl``, ``motor_egu``),
-      motor velocity limits, file destination, watchdog timeout,
-      ``consumer_tick``, plus anything you pass in ``md``.
+      ``t_acquire``, ``taxi_allowance``, ``compression``,
+      ``velocity_minimum_requested``), derived geometry (``p_initial``,
+      ``p_final``, ``num_frames``, ``scan_velocity``, ``d_taxi``,
+      ``motor_accl``, ``motor_egu``), raw motor velocity values
+      (``motor_velo``, ``motor_velocity_max_raw``,
+      ``motor_velocity_base_raw``) and the effective bracket
+      (``effective_v_max``, ``effective_v_min``) the plan used, file
+      destination, watchdog timeout, ``consumer_tick``, plus anything
+      you pass in ``md``.
     - An HDF5 file with the actual image data at
       ``ad_file_path/ad_file_name_NNNNNN.h5``.
 
     Common usage
     ------------
 
-    From a bits2606 IPython session::
+    From a 3-ID-C IPython session::
 
-        from bits2606.startup import *           # provides RE, oregistry
+        from id3c.startup import *           # provides RE, oregistry
         from flyscan_3idc import flyscan
 
         # 50 frames over a 5-EGU range at 20 Hz:
@@ -1827,15 +2104,33 @@ def flyscan(
       directory in ``ad_file_path`` doesn't exist on the IOC's
       filesystem.  If the IOC is containerized, create the directory
       inside the container or use a path that's visible there.
-    - **"scan_velocity exceeds motor max velocity" ValueError.** The
+    - **"scan_velocity exceeds motor .VELO" ValueError.** The
       requested combination of position range and frame rate would
-      require the motor to move faster than its ``.VMAX``.  Either
-      reduce ``exposures_per_egu``, increase ``t_period``, or shorten
-      ``p_end - p_start``.
+      require the motor to move faster than its currently configured
+      ``.VELO``.  Either reduce ``exposures_per_egu``, increase
+      ``t_period``, shorten ``p_end - p_start``, or raise the motor's
+      ``.VELO`` (caveat: ``.VELO`` is restored to its pre-run value
+      after the scan; you must change it *before* invoking the plan).
+    - **"scan_velocity is below effective v_min" ValueError.** The
+      computed velocity is below ``max(.VBAS, velocity_minimum)``.
+      Either increase ``exposures_per_egu``, decrease ``t_period``,
+      lengthen ``p_end - p_start``, or lower ``velocity_minimum`` /
+      the motor's ``.VBAS``.
+    - **"Cannot determine velocity ceiling ... .VELO unreadable"
+      ValueError.** The motor's ``.VELO`` field could not be read
+      (IOC down, PV typo, network drop).  Fix the IOC connection
+      before retrying.
     - **"compression=... not in HDF plugin's allowed set" ValueError.**
       The IOC's HDF plugin doesn't support the requested compression
       algorithm.  Inspect ``det.hdf1.compression.enum_strs`` to see
       what *is* supported by this IOC build.
+    - **An extra detector's per-frame timestamp never changes
+      during the scan.**  The device isn't self-updating; the
+      flyscan plan does not trigger ancillary devices.  Check the
+      ``timestamp`` field of the reading, not the value (a
+      genuinely steady-state value with a moving timestamp is
+      fine).  Use a CA-monitor-driven signal, or put a scaler in
+      continuous mode, before adding it to ``detectors``.
     - **Watchdog: "no frames captured" RuntimeError mid-scan.**  The
       cam isn't delivering frames to the HDF plugin.  Likely the HDF
       plugin's ``EnableCallbacks`` is ``Disable``, the cam's
@@ -1866,6 +2161,15 @@ def flyscan(
 
     Parameters
     ----------
+    detectors : list of ophyd Readable, optional
+        Extra readables reported in the primary stream once per HDF
+        frame, alongside ``det`` and ``flymotor``.  The plan does
+        **not** call ``.trigger()`` on these -- a flyscan has no
+        room to pause for ancillary triggers.  Each entry must
+        update its reported value(s) on its own (CA-monitor-driven
+        ``EpicsSignal``, scaler in continuous mode, etc.).  A
+        trigger-required device will simply report stale values
+        every frame.  Default: empty.
     det_name : str, default ``"adsimdet"``
         ophyd registry name of the area detector to fly.
     flymotor_name : str, default ``"m1"``
@@ -1896,6 +2200,35 @@ def flyscan(
         HDF5 filename stem (IOC appends a number and ``.h5``).
     ad_file_path : str, default ``"/tmp/flyscan"``
         Directory on the IOC's filesystem to write the HDF5 file.
+    velocity_minimum : float or None, default ``None``
+        Optional lower bound on the computed scan velocity, in motor
+        EGU per second.  The effective floor is ``max(.VBAS,
+        velocity_minimum)``; ``None`` (default) defers to ``.VBAS``
+        alone.  Must be non-negative if supplied.
+    plan_name : str, default ``"flyscan"``
+        Recorded in the run's ``start`` document under ``plan_name``.
+        Wrappers should pass their own name (e.g.
+        ``flyscan(plan_name="my_3idc_scan", ...)``) so the run's
+        provenance reflects the wrapper, not the inner flyscan call.
+        This is explicit because bluesky's ``RunEngine`` cannot
+        auto-derive ``plan_name`` for ``@bluesky_plan``-decorated
+        plans (the decorator wraps the generator in a ``Plan`` class
+        instance with no ``__name__`` attribute, so the auto-derived
+        value would be the empty string).
+    hdf_t_phase_offset : float or None, default ``None``
+        Seconds to add to each ``hdf1.array_counter`` monitor-stream
+        timestamp to obtain the corresponding frame's start-of-
+        acquire moment.  Used by
+        ``flyscan_3idc_analysis.pair_frames_to_positions`` to
+        compute the three per-frame positions (start_acquire,
+        end_acquire, end_period) recorded in the analysis output
+        and (eventually) the NeXus master file.  ``None`` (default)
+        means "use ``-t_acquire``" — the Phase 0 empirical verdict
+        for the gp:m1 + adsimdet IOC (``hdf_t`` arrives at
+        ~``end_acquire``, so ``start_acquire = hdf_t - t_acquire``).
+        See
+        ``flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic``
+        for determining the right value on a different IOC.
     _consumer_tick : float, default ``_CONSUMER_TICK_DEFAULT`` (20 ms)
         Internal: wake-up tick for the per-frame event consumer.
         Increase if your run-engine subscriptions can't keep up;
@@ -1917,10 +2250,11 @@ def flyscan(
     ValueError
         Position ordering is wrong (``p_end <= p_start``),
         ``exposures_per_egu`` is non-positive, ``taxi_allowance`` is
-        negative, ``t_acquire > t_period``, computed ``num_frames`` is
-        too small, computed ``scan_velocity`` is outside the motor's
-        limits, or ``compression`` is not in the HDF plugin's
-        enumeration.
+        negative, ``velocity_minimum`` is negative,
+        ``t_acquire > t_period``, computed ``num_frames`` is too small,
+        the motor's ``.VELO`` is unreadable, computed ``scan_velocity``
+        is outside the effective ``[v_min, v_max]`` bracket, or
+        ``compression`` is not in the HDF plugin's enumeration.
     RuntimeError
         IOC preflight failed (an expected PV did not connect), or
         the HDF plugin's file path does not exist on the IOC's
@@ -1942,10 +2276,30 @@ def flyscan(
     # t_acquire defaults to t_period (continuous exposure).
     if t_acquire is None:
         t_acquire = t_period
+    # hdf_t_phase_offset defaults to -t_acquire, the Phase 0
+    # verdict for the gp:m1 + adsimdet IOC: hdf_t arrives at
+    # ~end_acquire, so start_acquire = hdf_t - t_acquire.
+    if hdf_t_phase_offset is None:
+        hdf_t_phase_offset = -t_acquire
+    # Validate each extra readable up front so a bad entry fails
+    # before any IOC traffic.
+    if detectors is None:
+        detectors = []
+    from bluesky.protocols import Readable
+
+    for i, obj in enumerate(detectors):
+        if not isinstance(obj, Readable):
+            raise TypeError(
+                f"detectors[{i}] = {obj!r} is not a Readable"
+                " (a flyscan cannot trigger ancillary devices;"
+                " each must update its own value)."
+            )
+    detector_names = [getattr(d, "name", repr(d)) for d in detectors]
     logger.info(
         "flyscan: entered. det_name=%r flymotor_name=%r"
         " p_start=%g p_end=%g exposures_per_egu=%g"
-        " t_acquire=%g t_period=%g taxi_allowance=%g compression=%r",
+        " t_acquire=%g t_period=%g taxi_allowance=%g compression=%r"
+        " detectors=%r",
         det_name,
         flymotor_name,
         p_start,
@@ -1955,6 +2309,7 @@ def flyscan(
         t_period,
         taxi_allowance,
         compression,
+        detector_names,
     )
     det = oregistry.find(det_name, allow_none=True)
     flymotor = oregistry.find(flymotor_name, allow_none=True)
@@ -1988,7 +2343,7 @@ def flyscan(
         t_period,
         taxi_allowance,
     )
-    v_max, v_base = validate_flyscan_inputs(
+    v_velo, v_vmax, v_vbas, v_max, v_min = validate_flyscan_inputs(
         det,
         det_name,
         flymotor,
@@ -1997,6 +2352,7 @@ def flyscan(
         t_acquire,
         t_period,
         compression,
+        velocity_minimum=velocity_minimum,
     )
 
     # Rebind derived values to plain locals so the rest of the plan
@@ -2023,7 +2379,7 @@ def flyscan(
     hdf_flush_timeout_max = _hdf_flush_timeout(det, hdf_num_capture)
 
     _md = build_flyscan_md(
-        plan_name=inspect.currentframe().f_code.co_name,
+        plan_name=plan_name,
         det_name=det_name,
         flymotor_name=flymotor_name,
         p_start=p_start,
@@ -2034,13 +2390,19 @@ def flyscan(
         taxi_allowance=taxi_allowance,
         compression=compression,
         geometry=geometry,
+        v_velo=v_velo,
+        v_vmax=v_vmax,
+        v_vbas=v_vbas,
         v_max=v_max,
-        v_base=v_base,
+        v_min=v_min,
+        velocity_minimum=velocity_minimum,
         ad_file_name=ad_file_name,
         ad_file_path=ad_file_path,
         hdf_num_capture=hdf_num_capture,
         hdf_flush_timeout_max=hdf_flush_timeout_max,
         consumer_tick=_consumer_tick,
+        hdf_t_phase_offset=hdf_t_phase_offset,
+        detector_names=detector_names,
     )
     _md.update(md or {})
 
@@ -2123,6 +2485,290 @@ def flyscan(
     )
     yield from bps.abs_set(flymotor, p_initial, group="taxi")
 
+    def update_master_file():
+        """Update the NeXus master file once run is complete.
+
+        Three updates, in order:
+
+        1. Add an HDF5 external link at ``/entry/images`` pointing
+           at the IOC's frame file's ``/entry/data`` group.
+        2. Add an ``NXdata`` group at ``/entry/positions`` containing
+           the per-frame motor-position triple
+           (``position_start_acquire`` / ``_end_acquire`` /
+           ``_end_period``) for every in-scan frame, plus
+           ``image_number`` and ``timestamp`` columns, plus a
+           ``frame_index`` dataset (= ``image_number - 1``) that
+           0-based-indexes into ``/entry/images/data`` along its
+           first axis (handles the row-count mismatch: the
+           positions group has only in-scan rows, while the images
+           dataset has all captured frames including taxi/coast).
+           Computed by ``flyscan_3idc_analysis.pair_frames_to_positions``
+           against the just-completed run.
+        3. Add a NeXus-canonical ``NXdata`` group at
+           ``/entry/flyscan_data`` for default plotting.  Group
+           attributes: ``signal="data"``, ``axes=["position_start_acquire"]``.
+           ``data`` is a virtual dataset (``h5py.VirtualLayout`` +
+           ``VirtualSource``) that slices the in-scan substack out
+           of the externally-linked IOC frame file -- so the bytes
+           are not copied; the virtual dataset just describes which
+           rows of the source dataset are in-scan.  Sibling
+           ``position_start_acquire`` / ``position_end_acquire`` /
+           ``position_end_period`` arrays (duplicated from
+           ``/entry/positions`` so this group is self-contained for
+           default plotting).  Also sets ``/entry@default =
+           "flyscan_data"`` so a NeXus-aware viewer opens this group
+           by default (in-scan images vs. motor position is a more
+           useful default view of a flyscan run than whatever
+           apstools NXWriter set originally).
+
+        Called from ``_main`` after ``kickoff_and_monitor`` returns
+        — i.e. after the inner run_decorator has emitted its stop
+        document, which means nxwriter's background _threaded_writer
+        has been launched.  ``wait_writer_plan_stub`` blocks until
+        that thread finishes and ``nxwriter.output_nexus_file`` is
+        populated.
+
+        Discovers ``nxwriter`` and ``cat`` (the Tiled catalog) by
+        importing them from ``id3c.startup``.  If that import
+        fails (id3c not installed, or NEXUS_DATA_FILES.ENABLE
+        was False at startup so ``nxwriter`` was never bound), this
+        function is a no-op.  If only the positions-group write
+        fails (e.g. catalog isn't ingestable, or
+        pair_frames_to_positions raises), the external link is
+        still written and a WARNING is logged.
+        """
+        # Resolve nxwriter BEFORE any references to it.  Doing the
+        # import inside the `if nxwriter is not None:` body (the
+        # natural-looking shape) trips Python's local-variable
+        # binding rule: the `from ... import nxwriter` later in the
+        # function makes `nxwriter` a local for the whole function,
+        # and the `if` check then UnboundLocalErrors before the
+        # import has run.
+        try:
+            from id3c.startup import nxwriter
+        except ImportError:
+            # Either id3c isn't installed or nxwriter wasn't
+            # enabled at startup (the name isn't bound, which
+            # `from ... import` reports as ImportError).
+            nxwriter = None
+
+        if nxwriter is None:
+            return  # generator returns empty; yield from sees StopIteration
+
+        import h5py
+
+        yield from nxwriter.wait_writer_plan_stub()
+        # Update master file with external file link.
+        ioc_file = det.hdf1.full_file_name.get(use_monitor=False)
+        external_addr = "/entry/data"
+        external_file = f"{AD_FILES_ROOT}{ioc_file.lstrip('/')}"
+        master_addr = "/entry/images"
+        master_file = nxwriter.output_nexus_file  # AttributeError if not written
+        with h5py.File(master_file, "a") as root:
+            root[master_addr] = h5py.ExternalLink(external_file, external_addr)
+        logger.info(
+            "flyscan._main: linked %s:%r into NeXus master file %s:%r",
+            external_file,
+            external_addr,
+            master_file,
+            master_addr,
+        )
+
+        # Second update: per-frame position trio in an NXdata group.
+        # Best-effort -- if anything fails here, the master file is
+        # still usable (external link is already in place); just log
+        # a WARNING.  Reasons this could fail: catalog hasn't
+        # ingested the run yet (Tiled async ingestion lag), the run
+        # is too short for the analyzer to produce any rows, or the
+        # catalog/cat name isn't importable from id3c.startup.
+        try:
+            from id3c.startup import cat
+            from id3c.utils.flyscan_3idc_analysis import pair_frames_to_positions
+
+            uid = nxwriter.uid  # NXWriter records the run uid as
+            # part of receiver's start handler.
+            run = cat[uid]
+            df = pair_frames_to_positions(run)
+            if len(df) == 0:
+                logger.warning(
+                    "flyscan._main: pair_frames_to_positions returned"
+                    " 0 rows for uid=%r; skipping /entry/positions"
+                    " write",
+                    uid,
+                )
+            else:
+                positions_addr = "/entry/positions"
+                # frame_index = image_number - 1 maps each in-scan
+                # row to its corresponding slab in /entry/images/data.
+                # The IOC's array_counter is 1-based (first frame
+                # increments the counter to 1) while HDF5 dataset
+                # axes are 0-based; this offset is a structural
+                # property of the EPICS areaDetector NDFileHDF5
+                # plugin, not a per-scan accident.  Downstream code
+                # uses frame_index to slice /entry/images/data;
+                # image_number is preserved so consumers can also
+                # cross-reference the IOC counter monitor stream.
+                image_number_arr = df["image_number"].to_numpy()
+                frame_index_arr = image_number_arr - 1
+                with h5py.File(master_file, "a") as root:
+                    if positions_addr in root:
+                        # Defensive: a re-link attempt (shouldn't
+                        # happen normally) should not crash on
+                        # 'name already exists'.
+                        del root[positions_addr]
+                    grp = root.create_group(positions_addr)
+                    grp.attrs["NX_class"] = "NXdata"
+                    grp.attrs["signal"] = "position_start_acquire"
+                    grp.attrs["axes"] = "image_number"
+                    ds_img = grp.create_dataset("image_number", data=image_number_arr)
+                    ds_img.attrs["description"] = (
+                        "IOC-side hdf1.array_counter value at frame"
+                        " capture; 1-based per EPICS areaDetector"
+                        " NDFileHDF5 plugin convention."
+                    )
+                    ds_idx = grp.create_dataset("frame_index", data=frame_index_arr)
+                    # NeXus-style "this dataset is an index into
+                    # another dataset" annotation.  No formal NeXus
+                    # base class for this; we use a clear free-form
+                    # attribute so both human and programmatic
+                    # readers can resolve the link.
+                    ds_idx.attrs["target"] = "/entry/images/data"
+                    ds_idx.attrs["description"] = (
+                        "0-based index into /entry/images/data along"
+                        " its first axis; equal to image_number - 1."
+                        " To slice the in-scan image substack:"
+                        " images = f['/entry/images/data'];"
+                        " idx = f['/entry/positions/frame_index'][:];"
+                        " in_scan_images = images[idx, :, :]"
+                    )
+                    grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
+                    grp.create_dataset(
+                        "position_start_acquire",
+                        data=df["position_start_acquire"].to_numpy(),
+                    )
+                    grp.create_dataset(
+                        "position_end_acquire",
+                        data=df["position_end_acquire"].to_numpy(),
+                    )
+                    grp.create_dataset(
+                        "position_end_period", data=df["position_end_period"].to_numpy()
+                    )
+                logger.info(
+                    "flyscan._main: wrote %d per-frame positions"
+                    " (with frame_index 0-based: %d..%d) into NeXus"
+                    " master file %s:%r",
+                    len(df),
+                    int(frame_index_arr[0]),
+                    int(frame_index_arr[-1]),
+                    master_file,
+                    positions_addr,
+                )
+
+                # Third update: NeXus-canonical NXdata group
+                # /entry/flyscan_data that pairs the in-scan image
+                # substack (as a Virtual Dataset slicing into the
+                # externally-linked IOC frame file) with the three
+                # per-frame position arrays.  This is the group a
+                # downstream NeXus reader plots by default --
+                # signal="data" (the images), axes=
+                # ["position_start_acquire"] (the abscissa).
+                #
+                # The "data" dataset uses h5py.VirtualLayout to
+                # express "rows frame_index of <external file>'s
+                # /entry/data/data" without copying the image data
+                # into the master file.  Composes cleanly with the
+                # /entry/images external link: the same image bytes
+                # are referenced from two locations in the master
+                # (the whole-stack external link, and the in-scan
+                # substack virtual dataset).  Virtual datasets are
+                # standard HDF5 1.10+; any h5py / pyniexus / NeXus
+                # reader supports them transparently.
+                flyscan_data_addr = "/entry/flyscan_data"
+                # The IOC frame file must be open momentarily to
+                # read its shape and dtype; we already know it
+                # exists because the /entry/images external-link
+                # write succeeded above.  Open relative-to-PWD
+                # using the same path we used for the external link.
+                with h5py.File(external_file, "r") as src:
+                    src_ds = src[external_addr + "/data"]
+                    src_shape = src_ds.shape  # (N, H, W)
+                    src_dtype = src_ds.dtype
+                # VirtualLayout: out-shape (n_in_scan, H, W), each
+                # row sourced from src[frame_index[i], :, :].  For
+                # the typical contiguous frame_index range we could
+                # use a single slab, but a per-row assignment also
+                # works for non-contiguous indices (e.g. if the
+                # image-number dedup ever dropped middle frames).
+                n_in_scan = len(frame_index_arr)
+                out_shape = (n_in_scan,) + tuple(src_shape[1:])
+                layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
+                vsrc = h5py.VirtualSource(
+                    external_file,
+                    name=external_addr + "/data",
+                    shape=src_shape,
+                    dtype=src_dtype,
+                )
+                for out_i, src_i in enumerate(frame_index_arr):
+                    layout[out_i] = vsrc[int(src_i)]
+                with h5py.File(master_file, "a") as root:
+                    if flyscan_data_addr in root:
+                        del root[flyscan_data_addr]
+                    fs_grp = root.create_group(flyscan_data_addr)
+                    fs_grp.attrs["NX_class"] = "NXdata"
+                    fs_grp.attrs["signal"] = "data"
+                    fs_grp.attrs["axes"] = ["position_start_acquire"]
+
+                    # Update the path to the NeXus default plot.
+                    root["/entry"].attrs["default"] = "flyscan_data"
+
+                    fs_grp.create_virtual_dataset("data", layout)
+                    # Sibling arrays: identical to /entry/positions
+                    # for the per-frame triple (duplicated so this
+                    # group is self-contained for default plotting;
+                    # /entry/positions retains the full provenance
+                    # set including timestamp / image_number /
+                    # frame_index).
+                    fs_grp.create_dataset(
+                        "position_start_acquire",
+                        data=df["position_start_acquire"].to_numpy(),
+                    )
+                    fs_grp.create_dataset(
+                        "position_end_acquire",
+                        data=df["position_end_acquire"].to_numpy(),
+                    )
+                    fs_grp.create_dataset(
+                        "position_end_period", data=df["position_end_period"].to_numpy()
+                    )
+                    # NeXus default-plot convention: /entry@default
+                    # names the child group whose signal/axes a
+                    # NeXus-aware viewer will plot by default.
+                    # Previously the master file's default (set by
+                    # apstools NXWriter) pointed at whatever the
+                    # apstools default was (typically the bluesky
+                    # primary stream's data group).  For a flyscan
+                    # run, the more useful default is the in-scan
+                    # image substack paired with the motor positions
+                    # -- exactly what /entry/flyscan_data exposes.
+                logger.info(
+                    "flyscan._main: wrote NXdata group %s (virtual"
+                    " dataset 'data' shape=%r dtype=%r sourced from"
+                    " %s::%s) into NeXus master file %s, and set"
+                    " /entry@default='flyscan_data'",
+                    flyscan_data_addr,
+                    out_shape,
+                    src_dtype,
+                    external_file,
+                    external_addr + "/data",
+                    master_file,
+                )
+        except Exception as exc:
+            logger.warning(
+                "flyscan._main: failed to write per-frame positions"
+                " into NeXus master file %s: %r",
+                master_file,
+                exc,
+            )
+
     def _main():
         """Preparation (no data collection) and Kickoff (data collection)."""
         # AD runtime parameters (overridden, restored on exit)
@@ -2132,10 +2778,13 @@ def flyscan(
         yield from original_cache.override(det.hdf1.create_directory, -5)
         # then, a list of them
         for obj, value in [
+            (det.cam.array_counter, 0),  # optional
             (det.hdf1.array_counter, 0),  # optional
             (det.hdf1.auto_increment, "Yes"),
             (det.hdf1.auto_save, "Yes"),
             (det.hdf1.compression, compression),
+            (det.hdf1.dropped_arrays, 0),  # optional
+            (det.hdf1.dropped_output_arrays, 0),  # optional
             (det.hdf1.file_name, ad_file_name),
             (det.hdf1.file_number, 1),
             (det.hdf1.file_path, ad_file_path),
@@ -2218,11 +2867,19 @@ def flyscan(
             flymotor.name,
             scan_velocity,
         )
+        # CacheParameters.override captures the pre-run .VELO on this
+        # first call and restores it in _cleanup via original_cache.
+        # restore() — satisfies the requirement (flyscan_3idc.py:97-98)
+        # that the motor's .VELO be returned to its pre-run value once
+        # the run is finished.
         yield from original_cache.override(flymotor.velocity, scan_velocity)
 
         logger.info("flyscan._main: entering kickoff_and_monitor")
         yield from kickoff_and_monitor()
         logger.info("flyscan._main: kickoff_and_monitor returned")
+
+        yield from update_master_file()
+        logger.info("flyscan._main: update_master_file completed")
 
     ## Kickoff & Monitor
     @bpp.stage_decorator([det])  # Don't stage the flymotor!
@@ -2465,6 +3122,16 @@ def flyscan(
             timeout=no_frames_timeout,
         )
 
+        # Closure flag so monitor_loop can signal "I issued a
+        # controlled stop on the motor at p_end crossing."  When set,
+        # the bps.wait(group="scan") below will see a FailedStatus
+        # (the scan-group MoveStatus completes with success=False
+        # when EpicsMotor.stop() fires), and we swallow it as
+        # expected.  Without this flag, we'd have to either re-raise
+        # (wrong: this is the planned, normal end-of-scan path) or
+        # swallow unconditionally (wrong: would hide a real failure
+        # on the abs_set path).
+        motor_stopped_flag = [False]
         yield from monitor_loop(
             flymotor,
             det,
@@ -2472,16 +3139,54 @@ def flyscan(
             exit_when=hdf_drain_status,
             watchdog=watchdog_status,
             tick=_consumer_tick,
+            motor_stopped_flag=motor_stopped_flag,
+            extra_readables=detectors,
         )
 
-        # Absorb any motor settling past p_final after monitor_loop
-        # has exited (the HDF queue may drain before the motor fully
-        # stops at p_final).
-        logger.info(
-            "kickoff_and_monitor: waiting for %s to reach p_final",
-            flymotor.name,
-        )
-        yield from bps.wait(group="scan")
+        # Wait for the scan-group MoveStatus to settle.  Two cases:
+        #
+        # 1. monitor_loop issued a controlled stop on the motor at
+        #    the p_end crossing (the normal path).  The MoveStatus
+        #    from bps.abs_set(..., group="scan") completes with
+        #    success=False once the EpicsMotor.stop() callback runs,
+        #    and bps.wait raises FailedStatus.  We swallow it: the
+        #    "failure" is exactly what we asked for, and the motor
+        #    is now decelerating cleanly under .ACCL control.
+        # 2. monitor_loop exited without crossing p_end (e.g. the
+        #    HDF drain finished before the motor reached p_end —
+        #    unusual but legal).  motor_stopped_flag stays False, and
+        #    bps.wait completes normally when the motor reaches
+        #    p_final.
+        #
+        # FailedStatus from any other cause (e.g. the motor IOC
+        # rejected the move) propagates out: those are real failures
+        # the RunEngine should see.
+        if motor_stopped_flag[0]:
+            logger.info(
+                "kickoff_and_monitor: waiting for %s to finish"
+                " controlled-stop deceleration",
+                flymotor.name,
+            )
+            try:
+                yield from bps.wait(group="scan")
+            except FailedStatus:
+                # Expected: bps.stop() caused the scan-group
+                # MoveStatus to fire with success=False.  The motor
+                # is decelerating per .ACCL; _cleanup will verify it
+                # has actually come to rest.
+                logger.info(
+                    "kickoff_and_monitor: %s scan-group MoveStatus"
+                    " completed with success=False as expected after"
+                    " controlled stop",
+                    flymotor.name,
+                )
+        else:
+            logger.info(
+                "kickoff_and_monitor: waiting for %s to reach p_final"
+                " (no early stop was issued)",
+                flymotor.name,
+            )
+            yield from bps.wait(group="scan")
 
     def _cleanup():
         # Best-effort cleanup; swallow secondary failures so the
@@ -2700,21 +3405,3 @@ def flyscan(
     # *and* RE-injected exceptions (Ctrl-C, RequestAbort, ...), and
     # re-raises the original exception so the RunEngine sees it.
     yield from bpp.finalize_wrapper(_main(), _cleanup())
-
-
-# ----------------
-
-# TODO: Function identify motor readback with each image frame
-"""
-1. Starting with Bluesky Run object:
-1. Get flymotor readback monitor stream (position v. timestamp)
-1. Sort by timestamp
-1. Get timestamps bracketing p_start
-1. Get timestamps bracketing p_end
-1. Interpolate to approximate t_start & t_end
-1. Note flyscan data is the part between t_start & t_end
-1. Get area detector HDF image number monitor stream (image_num v. timestamp)
-1. Sort by timestamp
-1. Identify all flyscan image numbers collected between t_start & t_end
-1. For each frame number, interpolate flymotor readback at each timestamp
-"""
