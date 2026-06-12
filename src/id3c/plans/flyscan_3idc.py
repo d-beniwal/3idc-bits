@@ -21,7 +21,7 @@ General outline
    - collect metadata
    - snapshot anything we will modify, so we can restore it later
    - taxi the motor (at current velocity) to a position just before *p_start*
-2. Kickoff
+2. Takeoff
    - stage the detector
    - open the run
    - start the detector acquiring continuously
@@ -1957,7 +1957,7 @@ def flyscan(
         p_initial  <  p_start  <  p_end  <  p_final
         |             |          |          |
         |             |--scan----|          |
-        |--kickoff---|           |--stop----|
+        |--takeoff----|          |--stop----|
 
     - ``p_start``: the position at which the first useful frame should
       be captured.  Downstream processing trims frames captured before
@@ -2354,7 +2354,7 @@ def flyscan(
     )
 
     # Rebind derived values to plain locals so the rest of the plan
-    # (taxi/scan kickoff, watchdog timing, _cleanup) keeps reading
+    # (taxi/scan takeoff, watchdog timing, _cleanup) keeps reading
     # them by their familiar names.
     p_initial = geometry.p_initial
     p_final = geometry.p_final
@@ -2411,7 +2411,7 @@ def flyscan(
     # actually starts (e.g. a FailedStatus during the override loop),
     # so _cleanup doesn't waste time waiting for a non-existent flush
     # or, worse, flush a stale num_captured value left over from a
-    # prior run.  List-of-one so kickoff_and_monitor can flip it
+    # prior run.  List-of-one so takeoff_and_monitor can flip it
     # without a nonlocal declaration chain.
     capture_started = [False]
 
@@ -2469,7 +2469,7 @@ def flyscan(
         sig.kind = Kind.hinted
 
     ### Send motor to initial position (start moving; we wait below)
-    # The kickoff is grouped so the RunEngine tracks the MoveStatus
+    # The takeoff is grouped so the RunEngine tracks the MoveStatus
     # and we can wait on it explicitly after the AD setup work in
     # _main has completed (see bps.wait(group="taxi") below).  This
     # preserves the deliberate concurrency: motor moves while AD
@@ -2519,7 +2519,7 @@ def flyscan(
            useful default view of a flyscan run than whatever
            apstools NXWriter set originally).
 
-        Called from ``_main`` after ``kickoff_and_monitor`` returns
+        Called from ``_main`` after ``takeoff_and_monitor`` returns
         — i.e. after the inner run_decorator has emitted its stop
         document, which means nxwriter's background _threaded_writer
         has been launched.  ``wait_writer_plan_stub`` blocks until
@@ -2768,7 +2768,7 @@ def flyscan(
             )
 
     def _main():
-        """Preparation (no data collection) and Kickoff (data collection)."""
+        """Preparation (no data collection) and takeoff (data collection)."""
         # AD runtime parameters (overridden, restored on exit)
         # Set these before device staging
         logger.info("flyscan._main: overriding AD runtime parameters")
@@ -2872,14 +2872,14 @@ def flyscan(
         # the run is finished.
         yield from original_cache.override(flymotor.velocity, scan_velocity)
 
-        logger.info("flyscan._main: entering kickoff_and_monitor")
-        yield from kickoff_and_monitor()
-        logger.info("flyscan._main: kickoff_and_monitor returned")
+        logger.info("flyscan._main: entering takeoff_and_monitor")
+        yield from takeoff_and_monitor()
+        logger.info("flyscan._main: takeoff_and_monitor returned")
 
         yield from update_master_file()
         logger.info("flyscan._main: update_master_file completed")
 
-    ## Kickoff & Monitor
+    ## Takeoff & In-flight Monitor
     @bpp.stage_decorator([det])  # Don't stage the flymotor!
     # Three bespoke monitor streams (one per signal):
     #   - det.hdf1.array_counter: HDF writer's frame count (with
@@ -2895,8 +2895,8 @@ def flyscan(
         ]
     )
     @bpp.run_decorator(md=_md)
-    def kickoff_and_monitor():
-        # Kickoff ordering (revised 2026-06-08 after empirical
+    def takeoff_and_monitor():
+        # Takeoff ordering (revised 2026-06-08 after empirical
         # observation that the cam delivered its first frame several
         # seconds after Acquire=1, by which time the motor was already
         # past p_start, costing the user a chunk of their requested
@@ -2930,7 +2930,7 @@ def flyscan(
         )
         actual_num_capture = _safe_get(det.hdf1, "num_capture", use_monitor=False)
         logger.info(
-            "kickoff_and_monitor: IOC state pre-acquire:"
+            "takeoff_and_monitor: IOC state pre-acquire:"
             " cam.acquire_time=%r cam.acquire_period=%r"
             " cam.image_mode=%r hdf1.num_capture=%r"
             " (requested: t_acquire=%g t_period=%g num_capture=%d)",
@@ -2942,7 +2942,7 @@ def flyscan(
             t_period,
             hdf_num_capture,
         )
-        logger.info("kickoff_and_monitor: starting %s acquisition", det.name)
+        logger.info("takeoff_and_monitor: starting %s acquisition", det.name)
         # Use bps.mv (not bps.abs_set) so we don't proceed until
         # Acquire_RBV has caught up to 1 ("Acquiring").  Otherwise
         # cam_stopped_status (built below) could fire immediately
@@ -2965,7 +2965,7 @@ def flyscan(
         # raise than launch the motor into a dead scan.
         first_frame_timeout = max(5.0 * t_period, 5.0)
         logger.info(
-            "kickoff_and_monitor: waiting for first frame (timeout=%gs)",
+            "takeoff_and_monitor: waiting for first frame (timeout=%gs)",
             first_frame_timeout,
         )
         first_frame_status = SubscriptionStatus(
@@ -2989,7 +2989,7 @@ def flyscan(
                 yield from bps.sleep(_consumer_tick)
             if not first_frame_status.success:
                 msg = (
-                    "kickoff_and_monitor: cam did not deliver a first"
+                    "takeoff_and_monitor: cam did not deliver a first"
                     f" frame within {first_frame_timeout:g}s after"
                     f" Acquire=1 on {det.name}."
                     f" hdf1.num_captured={int(det.hdf1.num_captured.get(use_monitor=False))}"  # noqa: E501
@@ -3000,7 +3000,7 @@ def flyscan(
                 raise RuntimeError(msg)
             first_frame_latency = time.time() - t0_first
             logger.info(
-                "kickoff_and_monitor: first frame received after %.3fs"
+                "takeoff_and_monitor: first frame received after %.3fs"
                 " (num_captured=%d)",
                 first_frame_latency,
                 int(det.hdf1.num_captured.get(use_monitor=False)),
@@ -3013,7 +3013,7 @@ def flyscan(
 
         # Cam is live.  Now launch the motor toward p_final.
         logger.info(
-            "kickoff_and_monitor: launching %s -> p_final=%g (non-blocking)",
+            "takeoff_and_monitor: launching %s -> p_final=%g (non-blocking)",
             flymotor.name,
             p_final,
         )
@@ -3073,7 +3073,7 @@ def flyscan(
             cam_stopped_sig = det.cam.acquire
             cam_stopped_signal_name = "cam.acquire"
         logger.info(
-            "kickoff_and_monitor: using %s for cam-stopped status",
+            "takeoff_and_monitor: using %s for cam-stopped status",
             cam_stopped_signal_name,
         )
         cam_stopped_status = SubscriptionStatus(
@@ -3161,7 +3161,7 @@ def flyscan(
         # the RunEngine should see.
         if motor_stopped_flag[0]:
             logger.info(
-                "kickoff_and_monitor: waiting for %s to finish"
+                "takeoff_and_monitor: waiting for %s to finish"
                 " controlled-stop deceleration",
                 flymotor.name,
             )
@@ -3173,14 +3173,14 @@ def flyscan(
                 # is decelerating per .ACCL; _cleanup will verify it
                 # has actually come to rest.
                 logger.info(
-                    "kickoff_and_monitor: %s scan-group MoveStatus"
+                    "takeoff_and_monitor: %s scan-group MoveStatus"
                     " completed with success=False as expected after"
                     " controlled stop",
                     flymotor.name,
                 )
         else:
             logger.info(
-                "kickoff_and_monitor: waiting for %s to reach p_final"
+                "takeoff_and_monitor: waiting for %s to reach p_final"
                 " (no early stop was issued)",
                 flymotor.name,
             )
