@@ -1962,7 +1962,7 @@ def flyscan(
     upper bound the motor is almost never actually allowed to reach —
     see below)::
 
-        p_initial  <  p_start  <  p_end  <  p_final
+        p_initial     <  p_start <  p_end   <  p_final
         |             |          |          |
         |             |--scan----|          |
         |--takeoff----|          |--stop----|
