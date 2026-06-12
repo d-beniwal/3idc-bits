@@ -2,6 +2,8 @@
 
 Fly scan an EPICS motor and collect Eiger2 (or any AreaDetector) images.
 
+Software coordination only, no hardware triggering.
+
 Usage
 -----
 
@@ -18,25 +20,21 @@ General outline
    - validate inputs
    - collect metadata
    - snapshot anything we will modify, so we can restore it later
-   - taxi the motor (at current velocity) to a position just
-     before *p_start*
+   - taxi the motor (at current velocity) to a position just before *p_start*
 2. Kickoff
    - stage the detector
    - open the run
    - start the detector acquiring continuously
-   - launch the motor toward (actually past) *p_end* (at computed
-     flyscan velocity)
+   - launch the motor toward (actually past) *p_end* (at computed flyscan velocity)
 3. Monitor
    - report one event per captured frame in the ``primary`` stream
-   - once the motor crosses *p_end*, stop the detector image
-     acquisitions and the motor movement
+   - once the motor crosses *p_end*, stop the detector image acquisitions and the motor movement
 4. Conclusion
    - close the run
    - drain the detector pipeline
    - verify the HDF5 file landed
-   - select the in-scan subset by position and write it to the
-     HDF5/NeXus master file
-   - restore everything snapshotted in step 1
+   - select the in-scan subset by position and write it to the HDF5/NeXus master file
+   - restore everything in step 1 snapshots
 
 Implementation note: this plan is software-correlated (no hardware
 gate or trigger signal). Frame-to-position pairing happens downstream
@@ -498,7 +496,7 @@ def configure_adsimdet(
     # typical frame sizes.
     #
     # We choose num_capture sized for the expected count times 1.5
-    # plus 20, which absorbs taxi-in/-out leading edges, post-stop
+    # plus 20, which absorbs (takeoff & landing) leading edges, post-stop
     # tail frames, and timing jitter for any sensible scan size.
     expected_frames = int(capture_duration / acquire_period)
     if num_capture is None:
@@ -1959,7 +1957,7 @@ def flyscan(
         p_initial  <  p_start  <  p_end  <  p_final
         |             |          |          |
         |             |--scan----|          |
-        |--taxi-in---|           |--stop----|
+        |--kickoff---|           |--stop----|
 
     - ``p_start``: the position at which the first useful frame should
       be captured.  Downstream processing trims frames captured before
@@ -2368,7 +2366,7 @@ def flyscan(
     # and 1e9 for Float64 1024x1024 frames (verified empirically;
     # likely a C int byte-count overflow in NDFileHDF5).  num_capture
     # = num_frames * 1.5 + 20 is comfortable for any sensible scan
-    # size while absorbing taxi-in/-out leading frames, post-stop
+    # size while absorbing takeoff & landing leading frames, post-stop
     # tail frames, and timing jitter.
     hdf_num_capture = int(num_frames * 1.5) + 20
 
@@ -2851,8 +2849,8 @@ def flyscan(
             dict(det.hdf1.stage_sigs),
         )
 
-        # Wait for the taxi-in move to finish, *then* change velocity.
-        # bps.wait(group="taxi") consumes the MoveStatus that
+        # Wait for the takeoff move to finish (the landing), *then* change
+        # velocity. bps.wait(group="taxi") consumes the MoveStatus that
         # bps.abs_set(..., group="taxi") registered with the
         # RunEngine; this replaces the old hand-rolled
         # wait_for_motor_done polling loop with the RunEngine's own
