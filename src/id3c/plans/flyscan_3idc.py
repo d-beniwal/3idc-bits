@@ -18,22 +18,26 @@ General outline
 ---------------
 
 1. Preparation
+
    * validate inputs
    * collect metadata
    * snapshot anything we will modify, so we can restore it later
    * taxi the motor (at current velocity) to a position just before *p_start*
 
 2. Takeoff
+
    * stage the detector
    * open the run
    * start the detector acquiring continuously
    * launch the motor toward (actually past) *p_end* (at computed flyscan velocity)
 
 3. Monitor
+
    * report one event per captured frame in the ``primary`` stream
    * once the motor crosses *p_end*, stop the detector image acquisitions and the motor movement
 
 4. Conclusion
+
    * close the run
    * drain the detector pipeline
    * verify the HDF5 file landed
