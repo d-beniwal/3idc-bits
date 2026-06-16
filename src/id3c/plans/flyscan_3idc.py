@@ -81,6 +81,9 @@ AD_FILES_ROOT = "./ad_files/"  # MUST be a relative (not absolute) path
 """soft link in PWD on this workstation to IOC's root path"""
 # TODO: instead, what about det.hdf1.{read,write}_path_template attributes?
 
+UNLIMITED_FRAMES = 1_000_000_000
+"""Stage_sigs value for cam.num_images in continuous mode (effectively no cap)."""
+
 logger = logging.getLogger(__name__)
 # Default the module's own logger to INFO so diagnostics show up in a
 # fresh CLI session without the user having to configure logging first.
@@ -444,7 +447,7 @@ def configure_adsimdet(
         do_acquire,
     )
 
-    UNLIMITED_FRAMES = 1_000_000_000
+    # UNLIMITED_FRAMES is now a module-level constant; see top of file.
 
     # 1. File destination (must happen before capture is armed)
     logger.info("configure_adsimdet: setting file_path=%r", ad_file_path)
@@ -2812,6 +2815,13 @@ def flyscan(
         det.stage_sigs["cam.image_mode"] = "Continuous"
         det.cam.stage_sigs["acquire_time"] = t_acquire
         det.cam.stage_sigs["acquire_period"] = t_period
+        # cam.num_images must be effectively unbounded for continuous
+        # acquisition (boundary detection stops the cam, not a frame
+        # count).  Some IOC builds honour num_images as a hard cap
+        # even in Continuous mode; if a user pre-set it small via
+        # MEDM the cam would stop early.  Pre-scan value is
+        # snapshotted by snapshot_stage_sigs and restored on unstage.
+        det.cam.stage_sigs["num_images"] = UNLIMITED_FRAMES
         det.hdf1.stage_sigs["num_capture"] = hdf_num_capture
         # AD callback-chain throttling (revised 2026-06-08 after a
         # flyscan reported only 59 of an expected 101 frames written
