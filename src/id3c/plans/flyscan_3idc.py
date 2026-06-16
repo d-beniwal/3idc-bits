@@ -90,11 +90,26 @@ MUST stay relative (portability).  See ``_external_link_target``.
 """
 
 UNLIMITED_FRAMES = 500_000
-"""Used in continuous mode (effectively no cap) by area_detectors.
+"""Hard cap on ``cam.num_images`` (Eiger rejects larger values)."""
 
-The Eiger refuses to arm when ``cam.num_images`` is set too high
-(1_000_000_000 was rejected on 2026-06-16; 500_000 is accepted).
+MAX_ACQUISITION_SECONDS = 300_000
+"""Soft cap on ``num_images * acquire_period`` (~3.5 days).
+
+The Eiger refuses to arm when the implied total acquisition
+duration exceeds ~600_000 s (probed 2026-06-16).  Stay well under
+that.  See ``effective_num_images``.
 """
+
+
+def effective_num_images(t_period: float) -> int:
+    """Return the ``cam.num_images`` value to stage for a given period.
+
+    Caps at ``UNLIMITED_FRAMES`` and at
+    ``MAX_ACQUISITION_SECONDS / t_period``, whichever is smaller.
+    """
+    by_time = int(MAX_ACQUISITION_SECONDS / max(t_period, 1e-6))
+    return max(1, min(UNLIMITED_FRAMES, by_time))
+
 
 logger = logging.getLogger(__name__)
 # Default the module's own logger to INFO so diagnostics show up in a
@@ -2988,7 +3003,7 @@ def flyscan(
         # condition; the user's pre-scan value is snapshotted by the
         # earlier snapshot_stage_sigs(det, det.cam, ...) call and
         # restored on unstage by restore_stage_sigs.
-        det.cam.stage_sigs["num_images"] = UNLIMITED_FRAMES
+        det.cam.stage_sigs["num_images"] = effective_num_images(t_period)
         det.hdf1.stage_sigs["num_capture"] = hdf_num_capture
         # AD callback-chain throttling (revised 2026-06-08 after a
         # flyscan reported only 59 of an expected 101 frames written
