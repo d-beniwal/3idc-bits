@@ -77,12 +77,20 @@ from ophyd.status import AndStatus
 from ophyd.status import SubscriptionStatus
 from ophyd.utils.errors import WaitTimeoutError
 
-AD_FILES_ROOT = "./ad_files/"  # MUST be a relative (not absolute) path
-"""soft link in PWD on this workstation to IOC's root path"""
-# TODO: instead, what about det.hdf1.{read,write}_path_template attributes?
+AD_FILES_DIRNAME = "ad_files"
+"""Name of the directory/symlink the external link target traverses.
+
+Adjacent to the NeXus master file.
+"""
+
+AD_FILES_ROOT = f"./{AD_FILES_DIRNAME}/"
+"""Relative-link root for the master's external link to the AD HDF1 file.
+
+MUST stay relative (portability).  See ``_external_link_target``.
+"""
 
 UNLIMITED_FRAMES = 1_000_000_000
-"""Stage_sigs value for cam.num_images in continuous mode (effectively no cap)."""
+"""Used in continuous mode (effectively no cap) by area_detectors."""
 
 logger = logging.getLogger(__name__)
 # Default the module's own logger to INFO so diagnostics show up in a
@@ -1241,6 +1249,105 @@ def restore_stage_sigs(snapshot):
     for dev, saved in snapshot:
         dev.stage_sigs.clear()
         dev.stage_sigs.update(saved)
+
+
+# Once-per-(master_dir, target) dedup for _check_ad_files_symlink.
+_AD_FILES_WARNED = set()
+
+
+def _check_ad_files_symlink(det, master_dir):
+    """Warn if ``./ad_files`` is missing in ``master_dir``.
+
+    Once per ``(master_dir, target)``.  Never creates the link.
+    Returns ``True`` if present, ``False`` if a warning was emitted.
+    """
+    import os
+
+    master_dir = str(master_dir)
+    if os.path.lexists(os.path.join(master_dir, AD_FILES_DIRNAME)):
+        return True
+
+    read_tmpl = getattr(det.hdf1, "read_path_template", None) or getattr(
+        det.hdf1, "_read_path_template", None
+    )
+    if read_tmpl:
+        target = read_tmpl.rstrip("/") or "/"
+    else:
+        target = (
+            "<the directory on this workstation"
+            " where the area-detector files are mounted>"
+        )
+
+    key = (master_dir, target)
+    if key in _AD_FILES_WARNED:
+        return False
+    _AD_FILES_WARNED.add(key)
+
+    name = AD_FILES_DIRNAME
+    logger.warning(
+        "\n"
+        "The directory or symlink './%s' is missing in %s.\n"
+        "\n"
+        "The NeXus master files written by this plan use external HDF5\n"
+        "links that point at the area-detector image files through a\n"
+        "directory or symlink named '%s' adjacent to the master.\n"
+        "Without it, tools that read the master cannot reach the image\n"
+        "data.\n"
+        "\n"
+        "To fix, run this command from %s:\n"
+        "\n"
+        "    ln -s %s %s\n"
+        "\n"
+        "The flyscan plan does NOT create this link automatically.\n"
+        "\n"
+        "To verify:\n"
+        "    ls -l %s       # should show '%s -> %s'\n"
+        "    ls %s/ | head  # should list at least one entry",
+        name,
+        master_dir,
+        name,
+        master_dir,
+        target,
+        name,
+        name,
+        name,
+        target,
+        name,
+    )
+    return False
+
+
+def _external_link_target(det, ad_files_root=AD_FILES_ROOT):
+    """Relative external-link target: ``{ad_files_root}<suffix>``.
+
+    ``<suffix>`` is ``det.hdf1.full_file_name`` with
+    ``hdf1.write_path_template`` stripped (the host-specific prefix).
+    Falls back to the full absolute path with a WARNING if the
+    template is missing or doesn't match.
+    """
+    ioc_file = det.hdf1.full_file_name.get(use_monitor=False)
+    write_tmpl = getattr(det.hdf1, "write_path_template", None) or getattr(
+        det.hdf1, "_write_path_template", None
+    )
+    if write_tmpl:
+        prefix = write_tmpl if write_tmpl.endswith("/") else write_tmpl + "/"
+        if ioc_file.startswith(prefix):
+            return f"{ad_files_root}{ioc_file[len(prefix) :]}"
+        logger.warning(
+            "_external_link_target: hdf1.write_path_template=%r does"
+            " not prefix hdf1.full_file_name=%r; using legacy"
+            " absolute-path-encapsulated target (NOT portable).",
+            prefix,
+            ioc_file,
+        )
+    else:
+        logger.warning(
+            "_external_link_target: hdf1.write_path_template not"
+            " available on %r; using legacy absolute-path target"
+            " (NOT portable).",
+            type(det.hdf1).__name__,
+        )
+    return f"{ad_files_root}{ioc_file.lstrip('/')}"
 
 
 def _wait_for_openable(path, mode="r", retries=5, timeout_s=10.0):
