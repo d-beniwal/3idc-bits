@@ -89,7 +89,7 @@ id3c.devices.laser_optics.LaserOptics:
 #   prefix: ""
 #   labels: ["diffractometer"]
 
-# ophyd.scaler.ScalerCH:
+ophyd.scaler.ScalerCH:
 - name: scaler_c
   prefix: 3ids:scaler1
   labels: ["scalers", "detectors"]
