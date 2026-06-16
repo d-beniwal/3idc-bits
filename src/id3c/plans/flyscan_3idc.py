@@ -34,7 +34,8 @@ General outline
 3. Monitor
 
    * report one event per captured frame in the ``primary`` stream
-   * once the motor crosses *p_end*, stop the detector image acquisitions and the motor movement
+   * once the motor crosses *p_end*, stop the detector image
+     acquisitions and the motor movement
 
 4. Conclusion
 
@@ -1081,13 +1082,18 @@ def build_flyscan_md(
     default) is recoverable from metadata.  Symmetric with the
     existing ``motor_accl_was_default`` pattern:
 
-    +----------------------------------+--------------------+-----------------------------------+
-    | metadata key                     | None substitute    | companion boolean                 |
-    +==================================+====================+===================================+
-    | ``motor_velocity_max_raw``       | ``float('nan')``   | ``motor_velocity_max_was_unreadable`` |
-    | ``motor_velocity_base_raw``      | ``float('nan')``   | ``motor_velocity_base_was_unreadable`` |
-    | ``velocity_minimum_requested``   | ``0.0``            | ``velocity_minimum_was_default``  |
-    +----------------------------------+--------------------+-----------------------------------+
+    +------------------------------+------------------+--------------------------------+
+    | metadata key                 | None substitute  | companion boolean              |
+    +==============================+==================+================================+
+    | ``motor_velocity_max_raw``   | ``float('nan')`` | ``motor_velocity_max_``        |
+    |                              |                  | ``was_unreadable``             |
+    +------------------------------+------------------+--------------------------------+
+    | ``motor_velocity_base_raw``  | ``float('nan')`` | ``motor_velocity_base_``       |
+    |                              |                  | ``was_unreadable``             |
+    +------------------------------+------------------+--------------------------------+
+    | ``velocity_minimum_``        | ``0.0``          | ``velocity_minimum_``          |
+    | ``requested``                |                  | ``was_default``                |
+    +------------------------------+------------------+--------------------------------+
 
     Rationale per key:
 
