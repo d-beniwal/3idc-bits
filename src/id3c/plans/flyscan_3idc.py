@@ -2977,7 +2977,7 @@ def flyscan(
                         )
                     logger.info(
                         "flyscan._main: wrote %s (virtual 'data'"
-                        " shape=%r dtype=%r from %s::%s) and set"
+                        " shape=%r dtype=%r from %s::%s) into %s and set"
                         " /entry@default='flyscan_data'",
                         flyscan_data_addr,
                         out_shape,
