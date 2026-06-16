@@ -19,10 +19,15 @@ apstools.devices.ad_creator:
           class: apstools.devices.AD_EpicsFileNameHDF5Plugin
           write_path_template: "/home/sector3/s3ida/XRD/"
           read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
-      - tiff1:
-          class: apstools.devices.AD_EpicsFileNameTIFFPlugin
-          write_path_template: "/home/sector3/s3ida/XRD/"
-          read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
+      # tiff1 commented out 2026-06-16: its stage() raises
+      # OSError("Path '/' does not exist on IOC.") because the IOC's
+      # TIFF1:FilePath is '/' and we never set it.  The flyscan plan
+      # does not use TIFF.  Re-enable + initialize file_path when
+      # TIFF output is wanted.
+      # - tiff1:
+      #     class: apstools.devices.AD_EpicsFileNameTIFFPlugin
+      #     write_path_template: "/home/sector3/s3ida/XRD/"
+      #     read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
       - roi1
       - stats1
 
