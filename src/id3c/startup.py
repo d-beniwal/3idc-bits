@@ -127,7 +127,9 @@ setup_baseline_stream(sd, oregistry, connect=False)
 # We get 5 TIFF files, as expected.
 eiger2 = oregistry["eiger2"]
 eiger2.hdf1.kind = "hinted"
-eiger2.tiff1.kind = "hinted"
+# eiger2.tiff1.kind = "hinted"
+eiger2.tiff1.kind = "omitted"
+eiger2.tiff1.stage_sigs["enable"] = 0  # no TIFF files (by default)
 
 from .plans.sim_plans import sim_count_plan  # noqa: E402, F401
 from .plans.sim_plans import sim_print_plan  # noqa: E402, F401

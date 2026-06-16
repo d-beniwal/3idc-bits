@@ -90,9 +90,12 @@ id3c.devices.laser_optics.LaserOptics:
 #   labels: ["diffractometer"]
 
 # ophyd.scaler.ScalerCH:
-# - name: scaler1
-#   prefix: vme:scaler1
-#   labels: ["scalers", "detectors"]
+- name: scaler_c
+  prefix: 3ids:scaler1
+  labels: ["scalers", "detectors"]
+- name: scaler_b
+  prefix: 3ida:scaler1
+  labels: ["scalers", "detectors"]
 
 # ophyd.EpicsMotor:
 # - {name: m1, prefix: gp:m1, labels: ["motor"]}
@@ -100,5 +103,9 @@ id3c.devices.laser_optics.LaserOptics:
 # - {name: m3, prefix: gp:m3, labels: ["motor"]}
 # - {name: m4, prefix: gp:m4, labels: ["motor"]}
 
-# ophyd.EpicsSignalRO:
-# - {name: i0_voltage, prefix: ???, labels: ["monitor"]}
+ophyd.EpicsSignalRO:
+#  - {name: scaler_clock, read_pv: 3ids:scaler1.S1, labels: ["monitor"]}
+#  - {name: IC0_C_counts, read_pv: 3ids:scaler1.S2, labels: ["monitor"]}
+#  - {name: IC1_B_counts, read_pv: 3ida:scaler1.S3, labels: ["monitor"]}
+  - {name: IC0_B_VDC, read_pv: 3ida:ADC_5.VAL, labels: ["monitor"]}
+  - {name: IC0_C_VDC, read_pv: 3ida:ADC_6.VAL, labels: ["monitor"]}
