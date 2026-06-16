@@ -1401,6 +1401,48 @@ def _wait_for_openable(path, mode="r", retries=5, timeout_s=10.0):
     return False
 
 
+# Cam state values (DetectorState_RBV enum) that indicate the cam
+# failed to arm or is otherwise unusable.  Empirically verified on
+# the Eiger 2026-06-16: failed arm transitions to 'Error' within ~2 ms.
+_CAM_ERROR_STATES = {"Error", "Aborted", "Aborting", "Disconnected"}
+
+
+def _check_cam_armed(det, poll_s=0.05, max_wait_s=0.5):
+    """Plan stub: verify the cam armed after ``cam.acquire = 1``.
+
+    Polls ``cam.detector_state``; on transition to an error state,
+    raises ``RuntimeError`` carrying ``cam.status_message`` so the
+    operator sees the IOC's real failure reason instead of the
+    downstream "Path '/' does not exist on IOC" message from
+    apstools.
+    """
+    cam = det.cam
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_wait_s:
+        state = ""
+        try:
+            state = cam.detector_state.get(use_monitor=False, as_string=True)
+        except Exception:
+            pass
+        if state in _CAM_ERROR_STATES:
+            msg = ""
+            try:
+                msg = cam.status_message.get(use_monitor=False, as_string=True)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{det.name} failed to arm: detector_state={state!r}"
+                f" status_message={msg!r}"
+            )
+        if state == "Acquire":
+            return
+        yield from bps.sleep(poll_s)
+    # Fall through: didn't see Error, didn't see Acquire.  Don't
+    # raise -- the first-frame timeout below will catch genuinely
+    # stuck cams.
+    return
+
+
 def snapshot_kinds(*signals):
     """Capture each signal's ``.kind`` for later restore.
 
@@ -3157,6 +3199,13 @@ def flyscan(
         # stage_sigs above), Acquire_RBV reaches 1 and stays there
         # until monitor_loop stops the cam.
         yield from bps.mv(det.cam.acquire, 1)
+        # Surface arm failures fast.  The Eiger reports them within
+        # ~2 ms via cam.detector_state -> Error + cam.status_message.
+        # Without this check the run would otherwise time out 5 s later
+        # in the first-frame wait below, with a misleading apstools
+        # "Path '/' does not exist on IOC" error from the unwinding
+        # path.  See sessions/2026-06-16/README.md for the probe data.
+        yield from _check_cam_armed(det)
         # From this point on, _cleanup should treat the HDF plugin as
         # active (drain, flush, verify).  If we never get here,
         # _cleanup skips that work entirely.
