@@ -399,6 +399,138 @@ def _empty_result() -> pd.DataFrame:
     return df
 
 
+EPICS_EPOCH_OFFSET_S = 631_152_000
+"""Add this to an EPICS timestamp to get a Unix timestamp.
+
+EPICS time is seconds since 1990-01-01T00:00:00 UTC; Unix time is
+seconds since 1970-01-01T00:00:00 UTC.  AD plugins store frame
+timestamps in EPICS time; bluesky monitor streams use Unix time.
+"""
+
+
+def pair_frames_to_positions_from_ad_file(
+    run,
+    ad_file_path,
+    *,
+    timestamp_dset="/entry/instrument/NDAttributes/NDArrayTimeStamp",
+    unique_id_dset="/entry/instrument/NDAttributes/NDArrayUniqueId",
+) -> pd.DataFrame:
+    """Pair frames with motor positions, sourcing timestamps from the AD file.
+
+    Same output shape as ``pair_frames_to_positions`` but reads
+    per-frame ``(timestamp, unique_id)`` from the AD HDF1 file's own
+    NDAttribute datasets instead of from the CA monitor stream.
+    The AD file is authoritative -- the IOC writes one row per
+    acquired frame -- so the image-number gaps caused by CA monitor
+    coalescing do not apply here.
+
+    The AD file's ``NDArrayTimeStamp`` is in EPICS epoch (seconds
+    since 1990-01-01 UTC).  Bluesky's motor monitor stream uses Unix
+    epoch.  This helper converts by adding ``EPICS_EPOCH_OFFSET_S``;
+    no per-IOC calibration measurement is required as long as the
+    AD IOC and the motor IOC are NTP-synchronized.
+
+    ``NDArrayUniqueId`` is 0-based (the IOC counts from 0).  This
+    helper adds 1 so the returned ``image_number`` matches the
+    1-based ``hdf1.array_counter`` convention used by
+    ``pair_frames_to_positions`` and by the downstream
+    ``frame_index = image_number - 1`` slicing.
+
+    Parameters
+    ----------
+    run : BlueskyRun
+        Same as ``pair_frames_to_positions``; only the motor monitor
+        stream is read from it.
+    ad_file_path : str
+        Path to the AD HDF1 file.  Caller is responsible for
+        resolving relative-link / symlink translation (e.g. via
+        ``flyscan_3idc._external_link_target`` + the workstation's
+        ``./ad_files/`` symlink).
+    timestamp_dset, unique_id_dset : str
+        HDF5 paths inside the AD file for the per-frame timestamp
+        and UID datasets.  Defaults match the EPICS areaDetector
+        NDFileHDF5 plugin's standard NDAttribute layout.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Same columns as ``pair_frames_to_positions``.
+    """
+    import h5py
+
+    md = _get_start_metadata(run)
+    flymotor_name = _require_metadata_key(md, "flymotor_name")
+    p_start = float(_require_metadata_key(md, "p_start"))
+    p_end = float(_require_metadata_key(md, "p_end"))
+    t_acquire = float(_require_metadata_key(md, "t_acquire"))
+    t_period = float(_require_metadata_key(md, "t_period"))
+
+    # Read motor monitor stream (Unix epoch).
+    motor_stream_name = f"{flymotor_name}_monitor"
+    motor_ds = _read_stream(run, motor_stream_name)
+    motor_t = _array_from_ds(motor_ds, "time", motor_stream_name)
+    motor_pos = _array_from_ds(motor_ds, flymotor_name, motor_stream_name)
+
+    # Read per-frame timestamp + UID from the AD HDF1 file.
+    with h5py.File(ad_file_path, "r") as f:
+        if timestamp_dset not in f:
+            raise KeyError(
+                f"AD file {ad_file_path!r} has no dataset {timestamp_dset!r}"
+            )
+        if unique_id_dset not in f:
+            raise KeyError(
+                f"AD file {ad_file_path!r} has no dataset {unique_id_dset!r}"
+            )
+        ad_t_epics = np.asarray(f[timestamp_dset][...], dtype=float)
+        ad_uid = np.asarray(f[unique_id_dset][...], dtype=np.int64)
+
+    if ad_t_epics.size != ad_uid.size:
+        raise ValueError(
+            f"AD timestamp and unique_id arrays disagree on length:"
+            f" {ad_t_epics.size} vs {ad_uid.size}"
+        )
+
+    # Convert EPICS epoch -> Unix epoch, and convert 0-based UID -> 1-based.
+    hdf_t = ad_t_epics + EPICS_EPOCH_OFFSET_S
+    hdf_counter = ad_uid + 1
+
+    # Same end_acquire semantic as the CA path: the IOC stamps each
+    # frame at end-of-acquire.  Phase offset of -t_acquire takes
+    # the frame timestamp back to start_acquire.
+    hdf_t_phase_offset = -t_acquire
+
+    logger.info(
+        "pair_frames_to_positions_from_ad_file: motor=%r (%d sample(s)),"
+        " ad_file=%r (%d frame(s)), p_start=%g p_end=%g"
+        " t_acquire=%g t_period=%g",
+        motor_stream_name,
+        motor_t.size,
+        ad_file_path,
+        hdf_t.size,
+        p_start,
+        p_end,
+        t_acquire,
+        t_period,
+    )
+
+    df = _interpolate_positions(
+        motor_t,
+        motor_pos,
+        hdf_t,
+        hdf_counter,
+        p_start,
+        p_end,
+        t_acquire=t_acquire,
+        t_period=t_period,
+        hdf_t_phase_offset=hdf_t_phase_offset,
+    )
+    logger.info(
+        "pair_frames_to_positions_from_ad_file: paired %d in-scan frame(s)",
+        len(df),
+    )
+    return df
+
+
 def pair_frames_to_positions(run) -> pd.DataFrame:
     """Pair each in-scan HDF frame with three motor positions per period.
 
