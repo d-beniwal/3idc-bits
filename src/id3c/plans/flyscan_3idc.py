@@ -89,8 +89,12 @@ AD_FILES_ROOT = f"./{AD_FILES_DIRNAME}/"
 MUST stay relative (portability).  See ``_external_link_target``.
 """
 
-UNLIMITED_FRAMES = 1_000_000_000
-"""Used in continuous mode (effectively no cap) by area_detectors."""
+UNLIMITED_FRAMES = 500_000
+"""Used in continuous mode (effectively no cap) by area_detectors.
+
+The Eiger refuses to arm when ``cam.num_images`` is set too high
+(1_000_000_000 was rejected on 2026-06-16; 500_000 is accepted).
+"""
 
 logger = logging.getLogger(__name__)
 # Default the module's own logger to INFO so diagnostics show up in a
