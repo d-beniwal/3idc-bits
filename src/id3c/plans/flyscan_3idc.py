@@ -1925,10 +1925,19 @@ def monitor_loop(
 
     # --- Inner helpers (per Phase 3 decision 3.1: named for clarity)
 
-    def _emit_pending_frames(last_captured):
+    def _emit_pending_frames(last_captured, *, acquire_stopped):
         """Drain the queue and emit one primary event per new frame.
 
         Returns the updated ``last_captured`` count.
+
+        After the cam has been stopped at the p_end crossing and the
+        motor reports it is no longer moving, suppress further event
+        emission: any frames the IOC reports past that point are
+        post-scan tail (the cam finishing its in-flight burst) and
+        are not associated with new in-scan motor positions.  The
+        bookkeeping return value (``highest``) is still advanced so
+        the loop's exit condition (driven by ``cam_stopped_status``
+        / ``hdf_drain_status``) is unaffected.
         """
         # Snapshot the highest value seen in the queue this tick.
         # The IOC publishes monotonically-increasing values; we
@@ -1945,21 +1954,35 @@ def monitor_loop(
                 highest = value
         if highest > last_captured:
             n_new = highest - last_captured
+            motor_done = True
+            if hasattr(flymotor, "motor_done_move"):
+                try:
+                    motor_done = bool(
+                        int(flymotor.motor_done_move.get(use_monitor=False))
+                    )
+                except Exception:
+                    motor_done = True
+            suppress = acquire_stopped and motor_done
             logger.debug(
                 "monitor_loop: %d new frame(s) (highest=%d,"
-                " drained %d queue entries) motor=%g",
+                " drained %d queue entries) motor=%g"
+                " acquire_stopped=%s motor_done=%s suppress=%s",
                 n_new,
                 highest,
                 n_drained,
                 flymotor.user_readback.get(use_monitor=False),
+                acquire_stopped,
+                motor_done,
+                suppress,
             )
-            # det + flymotor + any user-supplied extra readables.
-            readables = [det, flymotor, *extra_readables]
-            for _ in range(n_new):
-                yield from bps.create(name="primary")
-                for obj in readables:
-                    yield from bps.read(obj)
-                yield from bps.save()
+            if not suppress:
+                # det + flymotor + any user-supplied extra readables.
+                readables = [det, flymotor, *extra_readables]
+                for _ in range(n_new):
+                    yield from bps.create(name="primary")
+                    for obj in readables:
+                        yield from bps.read(obj)
+                    yield from bps.save()
         return highest
 
     def _check_p_end_crossing(acquire_stopped, last_captured):
@@ -2053,7 +2076,11 @@ def monitor_loop(
             _check_watchdog()
 
             # Drain producer queue, emit primary events.
-            last_captured = yield from _emit_pending_frames(last_captured)
+            # Pass acquire_stopped so emission is suppressed once the
+            # cam has been stopped and the motor has come to rest.
+            last_captured = yield from _emit_pending_frames(
+                last_captured, acquire_stopped=acquire_stopped
+            )
 
             # Stop cam when motor crosses p_end.
             acquire_stopped = yield from _check_p_end_crossing(
