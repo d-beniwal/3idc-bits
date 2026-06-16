@@ -2755,16 +2755,37 @@ def flyscan(
                 exc,
             )
 
+        # Loop B (test the external AD HDF1 file once, used by both
+        # steps 2 and 3 below).  Step 2 prefers AD-file timestamps
+        # when the file is openable (lossless source: the IOC writes
+        # one row per acquired frame, so no CA-monitor coalescing
+        # gaps).  Step 3 also requires the file for the VirtualLayout.
+        external_file_openable = _wait_for_openable(external_file, mode="r")
+        if not external_file_openable:
+            logger.warning(
+                "flyscan._main: external AD HDF1 file %r not openable;"
+                " step 2 will fall back to CA-monitor source and"
+                " step 3 will be skipped.",
+                external_file,
+            )
+
         # Step 2 of 3: /entry/positions per-frame correlation block.
         # Skipped (with df=None) if the catalog has no rows yet.
         df = None  # populated below; needed by step 3 if it runs
         try:
             from id3c.startup import cat
             from id3c.utils.flyscan_3idc_analysis import pair_frames_to_positions
+            from id3c.utils.flyscan_3idc_analysis import (
+                pair_frames_to_positions_from_ad_file,
+            )
 
             uid = nxwriter.uid
             run = cat[uid]
-            df = pair_frames_to_positions(run)
+            if external_file_openable:
+                # Preferred: AD file is authoritative and lossless.
+                df = pair_frames_to_positions_from_ad_file(run, external_file)
+            else:
+                df = pair_frames_to_positions(run)
             if len(df) == 0:
                 logger.warning(
                     "flyscan._main: pair_frames_to_positions returned"
@@ -2836,9 +2857,9 @@ def flyscan(
             df = None
 
         # Step 3 of 3: /entry/flyscan_data NXdata + VirtualLayout into
-        # the external AD HDF1 file.  Loop B: external file openable?
+        # the external AD HDF1 file.  Skip if Loop B above failed.
         if df is not None:
-            if not _wait_for_openable(external_file, mode="r"):
+            if not external_file_openable:
                 logger.error(
                     "flyscan._main: external AD HDF1 file %r not"
                     " openable; skipping /entry/flyscan_data."
