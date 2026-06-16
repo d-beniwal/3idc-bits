@@ -121,13 +121,17 @@ def _interpolate_positions(
         Integer HDF frame counter (``hdf1.array_counter``) aligned
         with ``hdf_t``.
     p_start, p_end : float
-        Scan range in motor engineering units.  Frames whose
-        ``position_start_acquire`` falls outside ``[p_start, p_end]``
-        are dropped.  Using ``position_start_acquire`` (not the
-        other two phases) is a deliberate choice: it defines "in
-        scan" as "the cam started exposing this frame while the
-        motor was inside the scan range," symmetric with how the
-        plan triggers acquisition relative to ``p_start``.
+        Scan range in motor engineering units.  A frame is "in scan"
+        if its time interval ``[start_acquire.t, end_period.t]``
+        OVERLAPS the time window during which the motor was inside
+        ``[p_start, p_end]``.  That window is bracketed by the first
+        and last motor-stream samples whose position lies in
+        ``[p_start, p_end]``.  This widening (over the older
+        "position_start_acquire inside [p_start, p_end]" rule) admits
+        leading-edge and trailing-edge frames whose exposure crossed
+        a boundary mid-way, as well as frames that fell on the
+        wrong side of the boundary only due to motor-stream
+        interpolation noise.
     t_acquire : float
         Exposure time per frame, in seconds.  Used to compute
         ``end_acquire = start_acquire + t_acquire``.
@@ -164,8 +168,10 @@ def _interpolate_positions(
 
         1. all three phase timestamps fall within the motor
            stream's time range (extrapolation is rejected);
-        2. ``position_start_acquire`` falls inside
-           ``[p_start, p_end]``.
+        2. the frame's ``[start_acquire.t, end_period.t]`` interval
+           overlaps the motor's in-range time window (the time
+           bracket during which the motor was inside
+           ``[p_start, p_end]``).
 
         Image numbers are unique within the returned frame; if the
         IOC's monitor stream emitted a counter value twice (CA
@@ -179,15 +185,15 @@ def _interpolate_positions(
 
     if motor_t.shape != motor_pos.shape:
         raise ValueError(
-            f"motor_t shape {motor_t.shape} != motor_pos shape" f" {motor_pos.shape}"
+            f"motor_t shape {motor_t.shape} != motor_pos shape {motor_pos.shape}"
         )
     if hdf_t.shape != hdf_counter.shape:
         raise ValueError(
-            f"hdf_t shape {hdf_t.shape} != hdf_counter shape" f" {hdf_counter.shape}"
+            f"hdf_t shape {hdf_t.shape} != hdf_counter shape {hdf_counter.shape}"
         )
     if motor_t.size < 2:
         raise ValueError(
-            f"motor stream has {motor_t.size} sample(s); need >= 2" " for interpolation"
+            f"motor stream has {motor_t.size} sample(s); need >= 2 for interpolation"
         )
     if t_acquire <= 0:
         raise ValueError(f"t_acquire={t_acquire!r} must be positive")
@@ -263,20 +269,76 @@ def _interpolate_positions(
     pos_end_a = np.interp(ts_end_a, m_t, m_p)
     pos_end_p = np.interp(ts_end_p, m_t, m_p)
 
-    # In-scan filter on position_start_acquire (the cam's
-    # "started looking at this position" moment).  See docstring
-    # for the rationale.
-    in_scan = (pos_start >= p_start) & (pos_start <= p_end)
+    # In-scan filter: time-domain overlap.
+    #
+    # A frame is "in scan" if the time interval over which it was
+    # exposing/holding ([start_acquire.t, end_period.t]) OVERLAPS the
+    # time window during which the motor was inside [p_start, p_end].
+    # This is a deliberate widening over the older
+    # "position_start_acquire inside [p_start, p_end]" rule, which
+    # over-rejected three classes of frame:
+    #
+    #   1. Leading-edge: exposure started just before p_start but
+    #      crossed p_start before end_acquire.  The frame DOES carry
+    #      data from inside the scan range.
+    #   2. Trailing-edge: exposure started just before p_end but
+    #      crossed p_end before end_period.  Same logic.
+    #   3. Boundary-noise: frames whose true position is inside
+    #      [p_start, p_end] but whose interpolated pos_start was
+    #      slightly outside due to motor-stream sampling noise near
+    #      the boundary.
+    #
+    # The motor in-range time window is bracketed by the first and
+    # last motor-stream samples whose position lies in [p_start, p_end].
+    # This handles forward sweeps, reverse sweeps, and the (less common)
+    # case where the motor passes back through the range, conservatively:
+    # the window spans from the earliest to the latest in-range sample,
+    # so a frame in between is admitted.
+    #
+    # Frames that never overlapped the window at all (taxi-in / coast-
+    # out frames whose entire [start_acquire, end_period] falls before
+    # the first in-range motor sample or after the last) are still
+    # dropped, which is the correct behaviour for the original taxi /
+    # coast rejection use case.
+    in_range_pos = (m_p >= p_start) & (m_p <= p_end)
+    if not in_range_pos.any():
+        # The motor never entered the scan range in this run; reject
+        # every frame.  This branch was implicitly handled before by
+        # the strict-position check; preserved here for symmetry.
+        in_scan = np.zeros_like(ts_start, dtype=bool)
+        motor_t_in_range_start = None
+        motor_t_in_range_end = None
+    else:
+        in_range_idx = np.where(in_range_pos)[0]
+        motor_t_in_range_start = float(m_t[in_range_idx[0]])
+        motor_t_in_range_end = float(m_t[in_range_idx[-1]])
+        in_scan = (ts_end_p >= motor_t_in_range_start) & (
+            ts_start <= motor_t_in_range_end
+        )
+
     n_out_of_scan = h_t_keep.size - int(in_scan.sum())
     if n_out_of_scan:
-        logger.info(
-            "_interpolate_positions: dropping %d HDF frame(s) with"
-            " position_start_acquire outside [%g, %g] (taxi-in /"
-            " coast-out frames)",
-            n_out_of_scan,
-            p_start,
-            p_end,
-        )
+        if motor_t_in_range_start is None:
+            logger.info(
+                "_interpolate_positions: dropping all %d HDF frame(s);"
+                " no motor sample ever fell inside [%g, %g]",
+                n_out_of_scan,
+                p_start,
+                p_end,
+            )
+        else:
+            logger.info(
+                "_interpolate_positions: dropping %d HDF frame(s) whose"
+                " [start_acquire.t, end_period.t] interval did not"
+                " overlap the motor in-range time window"
+                " [%g, %g] s (positions [%g, %g]) -- taxi-in / coast-out"
+                " frames",
+                n_out_of_scan,
+                motor_t_in_range_start,
+                motor_t_in_range_end,
+                p_start,
+                p_end,
+            )
 
     # After all filters, also dedup by image_number: the IOC's CA
     # monitor stream very occasionally emits a counter value twice
@@ -464,7 +526,7 @@ def _get_start_metadata(run) -> dict:
         raise KeyError("run.metadata is missing the 'start' document") from exc
     if not isinstance(start, dict):
         raise KeyError(
-            f"run.metadata['start'] is {type(start).__name__}," " expected dict"
+            f"run.metadata['start'] is {type(start).__name__}, expected dict"
         )
     return start
 
@@ -482,7 +544,7 @@ def _read_stream(run, stream_name: str):
         raise KeyError(f"run has no stream named {stream_name!r}")
     if not hasattr(stream, "read"):
         raise KeyError(
-            f"run.{stream_name} has no .read() method" f" (got {type(stream).__name__})"
+            f"run.{stream_name} has no .read() method (got {type(stream).__name__})"
         )
     return stream.read()
 
@@ -781,17 +843,17 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
     )
     print(
         f"  D1 (hdf_t - cam_t, in-scan): "
-        f"mean={d1_mean*1000:+8.3f} ms  std={d1_std*1000:6.3f} ms"
-        f"  min={d1_min*1000:+8.3f}  max={d1_max*1000:+8.3f}"
+        f"mean={d1_mean * 1000:+8.3f} ms  std={d1_std * 1000:6.3f} ms"
+        f"  min={d1_min * 1000:+8.3f}  max={d1_max * 1000:+8.3f}"
     )
     print(
         f"  D2 (diff(hdf_t) in-scan):    "
-        f"mean={d2_mean*1000:8.3f} ms"
-        f"  (expected t_period = {t_period*1000:.3f} ms,"
+        f"mean={d2_mean * 1000:8.3f} ms"
+        f"  (expected t_period = {t_period * 1000:.3f} ms,"
         f" sparseness x{sparseness_factor:.1f})"
     )
     print(
-        f"  t_acquire = {t_acquire*1000:.3f} ms," f"  t_period = {t_period*1000:.3f} ms"
+        f"  t_acquire = {t_acquire * 1000:.3f} ms,  t_period = {t_period * 1000:.3f} ms"
     )
     print("")
     print("  candidate semantics for hdf_t (predicted D1 vs observed):")
@@ -799,8 +861,8 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
         marker = " <- " if name == best_name else "    "
         print(
             f"    {marker}{name:14s}"
-            f"  predicted D1 = {predicted_d1*1000:+8.3f} ms"
-            f"   residual = {abs(d1_mean - predicted_d1)*1000:7.3f} ms"
+            f"  predicted D1 = {predicted_d1 * 1000:+8.3f} ms"
+            f"   residual = {abs(d1_mean - predicted_d1) * 1000:7.3f} ms"
         )
     print("")
     if is_reliable:
@@ -815,16 +877,16 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
         if sparse_data:
             print(
                 f"    - sparse: D2 (mean inter-event gap) = "
-                f"{d2_mean*1000:.1f} ms > 2 x t_period "
-                f"({2*t_period*1000:.1f} ms);"
+                f"{d2_mean * 1000:.1f} ms > 2 x t_period "
+                f"({2 * t_period * 1000:.1f} ms);"
                 f" CA monitor publish path is coalescing events,"
                 f" so cam-vs-hdf timestamps may not correspond to"
                 f" the same physical moment."
             )
         if noisy_data:
             print(
-                f"    - noisy: D1 stddev = {d1_std*1000:.1f} ms"
-                f" > t_acquire ({t_acquire*1000:.1f} ms);"
+                f"    - noisy: D1 stddev = {d1_std * 1000:.1f} ms"
+                f" > t_acquire ({t_acquire * 1000:.1f} ms);"
                 f" per-event timestamp jitter is too large to"
                 f" discriminate among the candidate semantics"
                 f" (which differ by units of t_acquire / t_period)."
@@ -832,9 +894,9 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
         if indecisive:
             print(
                 f"    - indecisive: best residual"
-                f" ({best_resid*1000:.1f} ms) > half the spread of"
+                f" ({best_resid * 1000:.1f} ms) > half the spread of"
                 f" candidate predictions"
-                f" ({0.5*candidate_spread*1000:.1f} ms);"
+                f" ({0.5 * candidate_spread * 1000:.1f} ms);"
                 f" no candidate is meaningfully closer than any other."
             )
         print(
