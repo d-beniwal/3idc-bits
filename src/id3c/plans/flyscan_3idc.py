@@ -612,7 +612,7 @@ def configure_adsimdet(
                 timeout=drain_timeout,
             )
             logger.info(
-                "configure_adsimdet: HDF queue drained" " (num_queued_arrays=0)",
+                "configure_adsimdet: HDF queue drained (num_queued_arrays=0)",
             )
         except (WaitTimeoutError, TimeoutError):
             logger.warning(
@@ -631,8 +631,7 @@ def configure_adsimdet(
         captured = det.hdf1.num_captured.get(use_monitor=False)
         if captured > 0:
             logger.info(
-                "configure_adsimdet: flushing file via write_file=1"
-                " (num_captured=%d)",
+                "configure_adsimdet: flushing file via write_file=1 (num_captured=%d)",
                 captured,
             )
             # Note: we use put() + _wait_for here rather than
@@ -652,7 +651,7 @@ def configure_adsimdet(
                     timeout=drain_timeout,
                 )
                 logger.info(
-                    "configure_adsimdet: write_file completed" " (full_file_name=%r)",
+                    "configure_adsimdet: write_file completed (full_file_name=%r)",
                     det.hdf1.full_file_name.get(
                         use_monitor=False,
                         as_string=True,
@@ -668,7 +667,7 @@ def configure_adsimdet(
                 )
         else:
             logger.info(
-                "configure_adsimdet: skipping write_file (no frames" " captured)",
+                "configure_adsimdet: skipping write_file (no frames captured)",
             )
 
     # 13. Stop the cam.
@@ -981,7 +980,7 @@ def validate_flyscan_inputs(
         enum_strs = tuple(getattr(comp_sig, "enum_strs", ()) or ())
     except Exception as exc:
         logger.debug(
-            "validate_flyscan_inputs: cannot read compression enum_strs:" " %r",
+            "validate_flyscan_inputs: cannot read compression enum_strs: %r",
             exc,
         )
     if enum_strs and compression not in enum_strs:
@@ -1242,6 +1241,38 @@ def restore_stage_sigs(snapshot):
     for dev, saved in snapshot:
         dev.stage_sigs.clear()
         dev.stage_sigs.update(saved)
+
+
+def _wait_for_openable(path, mode="r", retries=5, timeout_s=10.0):
+    """Try opening ``path`` with retries within ``timeout_s``.
+
+    Returns ``True`` on success, ``False`` on timeout.  Never raises.
+    """
+    import time
+
+    import h5py
+
+    deadline = time.monotonic() + timeout_s
+    delay = max(timeout_s / (max(retries, 1) + 1), 0.1)
+    attempt = 0
+    last_exc = None
+    while attempt < retries and time.monotonic() < deadline:
+        attempt += 1
+        try:
+            with h5py.File(path, mode):
+                pass
+            return True
+        except (OSError, IOError) as exc:
+            last_exc = exc
+            time.sleep(delay)
+    logger.debug(
+        "_wait_for_openable: %r mode=%r failed after %d attempt(s) (last error: %r)",
+        path,
+        mode,
+        attempt,
+        last_exc,
+    )
+    return False
 
 
 def snapshot_kinds(*signals):
@@ -1550,7 +1581,7 @@ def wait_for_acquire_drained(det, poll=0.001, timeout=10.0):
 
     t0 = time.time()
     logger.info(
-        "wait_for_acquire_drained(%s): has_busy=%s has_hdf_queue=%s" " timeout=%gs",
+        "wait_for_acquire_drained(%s): has_busy=%s has_hdf_queue=%s timeout=%gs",
         det.name,
         has_busy,
         has_hdf_queue,
@@ -1583,7 +1614,7 @@ def wait_for_acquire_drained(det, poll=0.001, timeout=10.0):
             return
         yield from bps.sleep(poll)
     logger.warning(
-        "wait_for_acquire_drained(%s): TIMEOUT after %gs" " (status.done=%s)",
+        "wait_for_acquire_drained(%s): TIMEOUT after %gs (status.done=%s)",
         det.name,
         timeout,
         status.done,
@@ -2460,7 +2491,7 @@ def flyscan(
         if hasattr(getattr(det, nm), "blocking_callbacks")
     ]
     logger.info(
-        "flyscan: snapshotting stage_sigs on det, cam, hdf1, and %d plugin(s):" " %s",
+        "flyscan: snapshotting stage_sigs on det, cam, hdf1, and %d plugin(s): %s",
         len(plugins),
         [p.name for p in plugins],
     )
@@ -2867,7 +2898,7 @@ def flyscan(
                 plugin.stage_sigs["blocking_callbacks"] = "No"
         det.hdf1.stage_sigs.move_to_end("capture")  # always last
         logger.debug(
-            "flyscan._main: stage_sigs configured." " det=%s cam=%s hdf1=%s",
+            "flyscan._main: stage_sigs configured. det=%s cam=%s hdf1=%s",
             dict(det.stage_sigs),
             dict(det.cam.stage_sigs),
             dict(det.hdf1.stage_sigs),
@@ -3294,7 +3325,7 @@ def flyscan(
                 )
                 if n_captured > 0 and full_name:
                     logger.info(
-                        "flyscan._cleanup: HDF5 file saved: %s" " (num_captured=%d)",
+                        "flyscan._cleanup: HDF5 file saved: %s (num_captured=%d)",
                         full_name,
                         n_captured,
                     )
@@ -3313,7 +3344,7 @@ def flyscan(
                     )
                 else:
                     logger.info(
-                        "flyscan._cleanup: no frames captured;" " no file expected",
+                        "flyscan._cleanup: no frames captured; no file expected",
                     )
             except Exception as exc:
                 logger.exception(
