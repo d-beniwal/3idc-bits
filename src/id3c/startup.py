@@ -120,16 +120,11 @@ setup_omega_laser_interlock(oregistry)
 setup_baseline_stream(sd, oregistry, connect=False)
 
 # Configure area detector plugins
-# FIXME: Why only one HDF5 file for each step in
-#     bp.scan([eiger2], sample_stage.xprime, 0, 0.2, 5)
-# Expected either 5 files with 1 frame each, or 1 file with 5 frames.
-#    Instead we get 1 file with 1 frame.
-# We get 5 TIFF files, as expected.
 eiger2 = oregistry["eiger2"]
 eiger2.hdf1.kind = "hinted"
 # eiger2.tiff1.kind = "hinted"
-eiger2.tiff1.kind = "omitted"
-eiger2.tiff1.stage_sigs["enable"] = 0  # no TIFF files (by default)
+# eiger2.tiff1.kind = "omitted"
+# eiger2.tiff1.stage_sigs["enable"] = 0  # no TIFF files (by default)
 
 from .plans.sim_plans import sim_count_plan  # noqa: E402, F401
 from .plans.sim_plans import sim_print_plan  # noqa: E402, F401
