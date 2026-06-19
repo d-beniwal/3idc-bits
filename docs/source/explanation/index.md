@@ -9,4 +9,5 @@ works the way it does.
 run_engine
 plans_and_stubs
 interlocks
+flyscan_frame_count
 ```

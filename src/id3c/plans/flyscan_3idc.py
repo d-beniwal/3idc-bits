@@ -2611,6 +2611,12 @@ def flyscan(
     # = num_frames * 1.5 + 20 is comfortable for any sensible scan
     # size while absorbing takeoff & landing leading frames, post-stop
     # tail frames, and timing jitter.
+    #
+    # NOTE: the raw HDF5 file therefore holds MORE frames than
+    # ``num_frames`` (pre-roll + post-stop tail).  This is explained in
+    # docs/source/explanation/flyscan_frame_count.md -- keep that page
+    # in sync if you change the pre-roll/tail behavior, this
+    # over-allocation, or the frame/position pairing.
     hdf_num_capture = int(num_frames * 1.5) + 20
 
     # Worst-case flush timeout assumes the HDF plugin fills to
