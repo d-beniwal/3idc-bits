@@ -8,6 +8,7 @@ Task-oriented recipes.
 run_a_scan
 inspect_data
 visualize_hdf5
+repair_flyscan_master
 add_a_device
 add_a_plan
 edit_and_build_docs

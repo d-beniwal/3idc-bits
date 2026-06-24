@@ -1053,3 +1053,151 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
         "noisy_data": noisy_data,
         "indecisive": indecisive,
     }
+
+
+def write_flyscan_data(
+    master_file,
+    external_file,
+    df,
+    *,
+    external_addr="/entry/data",
+    n_frames_expected=None,
+):
+    """Write the ``/entry/flyscan_data`` group into the NeXus master file.
+
+    This is the single primary-product group: an ``NXdata`` holding the
+    in-scan image substack (an ``h5py.VirtualLayout`` into the external
+    area-detector file, no bytes copied) plus the per-frame correlation
+    data, all from the authoritative AD HDF1 file.
+
+    Both the live flyscan plan and the offline repair tool call this so
+    the on-disk layout is identical regardless of when it is written.
+    Any pre-existing ``/entry/flyscan_data`` is replaced (idempotent).
+
+    Parameters
+    ----------
+    master_file : str
+        Path to the NeXus master HDF5 file (opened for append).
+    external_file : str
+        Path to the area-detector HDF1 file, resolvable from the
+        master file's directory (i.e. through the image-files symlink).
+    df : pandas.DataFrame
+        Output of ``pair_frames_to_positions_from_ad_file``; one row
+        per in-scan frame with ``image_number``, ``timestamp``, and the
+        three ``position_*`` columns.
+    external_addr : str
+        Group inside ``external_file`` holding ``data`` (the image
+        stack).  Defaults to ``/entry/data``.
+    n_frames_expected : int or None
+        Total acquired-frame count, recorded as provenance.  ``None``
+        omits the attribute.
+
+    Returns
+    -------
+    dict
+        Summary: ``n_frames_paired``, ``out_shape``, ``src_dtype``.
+    """
+    import h5py
+
+    flyscan_data_addr = "/entry/flyscan_data"
+    # frame_index = image_number - 1: IOC array_counter is 1-based,
+    # HDF5 dataset axes are 0-based.
+    image_number_arr = df["image_number"].to_numpy()
+    frame_index_arr = image_number_arr - 1
+    n_frames_paired = int(len(df))
+
+    with h5py.File(external_file, "r") as src:
+        src_ds = src[external_addr + "/data"]
+        src_shape = src_ds.shape  # (N, H, W)
+        src_dtype = src_ds.dtype
+    # VirtualLayout: out-shape (n_in_scan, H, W), each row sourced
+    # from src[frame_index[i], :, :].
+    n_in_scan = len(frame_index_arr)
+    out_shape = (n_in_scan,) + tuple(src_shape[1:])
+    layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
+    vsrc = h5py.VirtualSource(
+        external_file,
+        name=external_addr + "/data",
+        shape=src_shape,
+        dtype=src_dtype,
+    )
+    for out_i, src_i in enumerate(frame_index_arr):
+        layout[out_i] = vsrc[int(src_i)]
+
+    with h5py.File(master_file, "a") as root:
+        if flyscan_data_addr in root:
+            del root[flyscan_data_addr]
+        fs_grp = root.create_group(flyscan_data_addr)
+        fs_grp.attrs["NX_class"] = "NXdata"
+        fs_grp.attrs["signal"] = "data"
+        fs_grp.attrs["axes"] = ["position_start_acquire"]
+
+        # Provenance: this group is sourced entirely from the
+        # authoritative AD HDF1 file.
+        fs_grp.attrs["source"] = "ad_file"
+        fs_grp.attrs["source_description"] = (
+            "Per-frame data read from the authoritative area-detector"
+            " HDF1 file (lossless, one row per acquired frame)."
+        )
+        fs_grp.attrs["n_frames_paired"] = n_frames_paired
+        if n_frames_expected is not None:
+            fs_grp.attrs["n_frames_expected"] = int(n_frames_expected)
+
+        # Update the path to the NeXus default plot.
+        root["/entry"].attrs["default"] = "flyscan_data"
+
+        # Primary signal: the in-scan image substack.
+        fs_grp.create_virtual_dataset("data", layout)
+
+        # Plot axes (the position arrays).
+        fs_grp.create_dataset(
+            "position_start_acquire",
+            data=df["position_start_acquire"].to_numpy(),
+        )
+        fs_grp.create_dataset(
+            "position_end_acquire",
+            data=df["position_end_acquire"].to_numpy(),
+        )
+        fs_grp.create_dataset(
+            "position_end_period",
+            data=df["position_end_period"].to_numpy(),
+        )
+
+        # Subordinate per-frame correlation data.
+        ds_img = fs_grp.create_dataset("image_number", data=image_number_arr)
+        ds_img.attrs["description"] = (
+            "IOC-side hdf1.array_counter value at frame capture; 1-based"
+            " per EPICS areaDetector NDFileHDF5 plugin convention."
+        )
+        ds_idx = fs_grp.create_dataset("frame_index", data=frame_index_arr)
+        ds_idx.attrs["target"] = "/entry/images/data"
+        ds_idx.attrs["description"] = (
+            "0-based index into /entry/images/data along its first axis;"
+            " equal to image_number - 1.  /entry/flyscan_data/data is"
+            " already this substack; use frame_index only to map back to"
+            " the full /entry/images/data stack:"
+            " images = f['/entry/images/data'];"
+            " idx = f['/entry/flyscan_data/frame_index'][:];"
+            " in_scan_images = images[idx, :, :]"
+        )
+        fs_grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
+
+    logger.info(
+        "write_flyscan_data: wrote %s (virtual 'data' shape=%r dtype=%r"
+        " from %s::%s, %d in-scan frame(s), frame_index 0-based %d..%d)"
+        " into %s and set /entry@default='flyscan_data'",
+        flyscan_data_addr,
+        out_shape,
+        src_dtype,
+        external_file,
+        external_addr + "/data",
+        n_frames_paired,
+        int(frame_index_arr[0]),
+        int(frame_index_arr[-1]),
+        master_file,
+    )
+    return {
+        "n_frames_paired": n_frames_paired,
+        "out_shape": out_shape,
+        "src_dtype": src_dtype,
+    }

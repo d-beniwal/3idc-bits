@@ -1072,6 +1072,8 @@ def build_flyscan_md(
     velocity_minimum,
     ad_file_name,
     ad_file_path,
+    ad_read_path_template="",
+    ad_write_path_template="",
     hdf_num_capture,
     hdf_flush_timeout_max,
     consumer_tick,
@@ -1237,9 +1239,14 @@ def build_flyscan_md(
         "effective_v_min": v_min,  # floor used
         "velocity_minimum_requested": velocity_minimum_md,  # 0.0 if user passed None
         "velocity_minimum_was_default": velocity_minimum_was_default,
-        # File destination
+        # Detector data-file destination and the IOC->workstation path
+        # mapping (write = IOC side, read = workstation side), so a
+        # reader can locate the files from the master alone.  Empty
+        # string when a template is unavailable.
         "ad_file_name": ad_file_name,
         "ad_file_path": ad_file_path,
+        "ad_read_path_template": ad_read_path_template or "",
+        "ad_write_path_template": ad_write_path_template or "",
         "hdf_num_capture": hdf_num_capture,  # HDF plugin upper bound
         "hdf_flush_timeout_max": hdf_flush_timeout_max,  # worst-case (s)
         "consumer_tick": consumer_tick,  # monitor_loop wake-up tick (s)
@@ -1289,6 +1296,16 @@ def _read_path_template(det):
     """
     return getattr(det.hdf1, "read_path_template", None) or getattr(
         det.hdf1, "_read_path_template", None
+    )
+
+
+def _write_path_template(det):
+    """IOC-side write path prefix for the detector's image files, or None.
+
+    Sourced from ``det.hdf1.write_path_template``.
+    """
+    return getattr(det.hdf1, "write_path_template", None) or getattr(
+        det.hdf1, "_write_path_template", None
     )
 
 
@@ -1415,9 +1432,7 @@ def _external_link_target(det, ad_files_root=None):
     if ad_files_root is None:
         ad_files_root = ad_files_root_for(det)
     ioc_file = det.hdf1.full_file_name.get(use_monitor=False)
-    write_tmpl = getattr(det.hdf1, "write_path_template", None) or getattr(
-        det.hdf1, "_write_path_template", None
-    )
+    write_tmpl = _write_path_template(det)
     if write_tmpl:
         prefix = write_tmpl if write_tmpl.endswith("/") else write_tmpl + "/"
         if ioc_file.startswith(prefix):
@@ -2764,6 +2779,8 @@ def flyscan(
         velocity_minimum=velocity_minimum,
         ad_file_name=ad_file_name,
         ad_file_path=ad_file_path,
+        ad_read_path_template=_read_path_template(det) or "",
+        ad_write_path_template=_write_path_template(det) or "",
         hdf_num_capture=hdf_num_capture,
         hdf_flush_timeout_max=hdf_flush_timeout_max,
         consumer_tick=_consumer_tick,
@@ -3021,112 +3038,19 @@ def flyscan(
 
         if df is not None:
             try:
-                flyscan_data_addr = "/entry/flyscan_data"
-                # frame_index = image_number - 1: IOC array_counter is
-                # 1-based, HDF5 dataset axes are 0-based.
-                image_number_arr = df["image_number"].to_numpy()
-                frame_index_arr = image_number_arr - 1
-                n_frames_paired = int(len(df))
+                from id3c.utils.flyscan_3idc_analysis import write_flyscan_data
+
                 # Expected total acquired-frame count (authoritative AD
                 # file row count).  The in-scan paired count can be
                 # legitimately smaller (taxi-in / coast-out frames);
                 # recorded as provenance for the reader.
                 n_frames_expected = _expected_frame_count(external_file, run)
-                with h5py.File(external_file, "r") as src:
-                    src_ds = src[external_addr + "/data"]
-                    src_shape = src_ds.shape  # (N, H, W)
-                    src_dtype = src_ds.dtype
-                # VirtualLayout: out-shape (n_in_scan, H, W),
-                # each row sourced from src[frame_index[i], :, :].
-                n_in_scan = len(frame_index_arr)
-                out_shape = (n_in_scan,) + tuple(src_shape[1:])
-                layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
-                vsrc = h5py.VirtualSource(
-                    external_file,
-                    name=external_addr + "/data",
-                    shape=src_shape,
-                    dtype=src_dtype,
-                )
-                for out_i, src_i in enumerate(frame_index_arr):
-                    layout[out_i] = vsrc[int(src_i)]
-                with h5py.File(master_file, "a") as root:
-                    if flyscan_data_addr in root:
-                        del root[flyscan_data_addr]
-                    fs_grp = root.create_group(flyscan_data_addr)
-                    fs_grp.attrs["NX_class"] = "NXdata"
-                    fs_grp.attrs["signal"] = "data"
-                    fs_grp.attrs["axes"] = ["position_start_acquire"]
-
-                    # Provenance: this group is sourced entirely from the
-                    # authoritative AD HDF1 file.  Recorded so a reader
-                    # can confirm the source and frame counts from the
-                    # file alone.
-                    fs_grp.attrs["source"] = "ad_file"
-                    fs_grp.attrs["source_description"] = (
-                        "Per-frame data read from the authoritative"
-                        " area-detector HDF1 file (lossless, one row per"
-                        " acquired frame)."
-                    )
-                    fs_grp.attrs["n_frames_paired"] = n_frames_paired
-                    if n_frames_expected is not None:
-                        fs_grp.attrs["n_frames_expected"] = int(n_frames_expected)
-
-                    # Update the path to the NeXus default plot.
-                    root["/entry"].attrs["default"] = "flyscan_data"
-
-                    # Primary signal: the in-scan image substack.
-                    fs_grp.create_virtual_dataset("data", layout)
-
-                    # Plot axes (the position arrays).
-                    fs_grp.create_dataset(
-                        "position_start_acquire",
-                        data=df["position_start_acquire"].to_numpy(),
-                    )
-                    fs_grp.create_dataset(
-                        "position_end_acquire",
-                        data=df["position_end_acquire"].to_numpy(),
-                    )
-                    fs_grp.create_dataset(
-                        "position_end_period",
-                        data=df["position_end_period"].to_numpy(),
-                    )
-
-                    # Subordinate per-frame correlation data.
-                    ds_img = fs_grp.create_dataset(
-                        "image_number", data=image_number_arr
-                    )
-                    ds_img.attrs["description"] = (
-                        "IOC-side hdf1.array_counter value at frame"
-                        " capture; 1-based per EPICS areaDetector"
-                        " NDFileHDF5 plugin convention."
-                    )
-                    ds_idx = fs_grp.create_dataset("frame_index", data=frame_index_arr)
-                    ds_idx.attrs["target"] = "/entry/images/data"
-                    ds_idx.attrs["description"] = (
-                        "0-based index into /entry/images/data along"
-                        " its first axis; equal to image_number - 1."
-                        " /entry/flyscan_data/data is already this"
-                        " substack; use frame_index only to map back to"
-                        " the full /entry/images/data stack:"
-                        " images = f['/entry/images/data'];"
-                        " idx = f['/entry/flyscan_data/frame_index'][:];"
-                        " in_scan_images = images[idx, :, :]"
-                    )
-                    fs_grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
-                logger.info(
-                    "flyscan._main: wrote %s (virtual 'data'"
-                    " shape=%r dtype=%r from %s::%s, %d in-scan frame(s),"
-                    " frame_index 0-based %d..%d) into %s and set"
-                    " /entry@default='flyscan_data'",
-                    flyscan_data_addr,
-                    out_shape,
-                    src_dtype,
-                    external_file,
-                    external_addr + "/data",
-                    n_frames_paired,
-                    int(frame_index_arr[0]),
-                    int(frame_index_arr[-1]),
+                write_flyscan_data(
                     master_file,
+                    external_file,
+                    df,
+                    external_addr=external_addr,
+                    n_frames_expected=n_frames_expected,
                 )
             except Exception as exc:
                 logger.warning(

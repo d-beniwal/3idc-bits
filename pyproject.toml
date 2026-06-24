@@ -50,6 +50,9 @@ line-length = 88
 indent-width = 4
 target-version = "py311"
 
+[project.scripts]
+id3c-flyscan-repair = "id3c.utils.flyscan_repair:main"
+
 [project.optional-dependencies]
 dev = [ "build", "isort", "mypy", "pre-commit", "pytest", "ruff",]
 doc = [ "babel", "ipykernel", "jinja2", "linkify-it-py", "markupsafe", "myst-nb", "pydata-sphinx-theme", "pygments-ipython-console", "pygments", "sphinx-autoapi", "sphinx-copybutton", "sphinx-design", "sphinx-tabs", "sphinx",]
