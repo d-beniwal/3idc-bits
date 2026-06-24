@@ -1401,6 +1401,55 @@ def _wait_for_openable(path, mode="r", retries=5, timeout_s=10.0):
     return False
 
 
+def _expected_frame_count(
+    ad_file_path,
+    run,
+    *,
+    unique_id_dset="/entry/instrument/NDAttributes/NDArrayUniqueId",
+):
+    """Best-effort total acquired-frame count, for provenance.
+
+    Returns the authoritative count from the AD HDF1 file when
+    ``ad_file_path`` is given and openable (one row per acquired
+    frame).  Otherwise falls back to the scan-derived ``num_frames``
+    from the run's start document.  Returns ``None`` if neither
+    source is available.  Never raises.
+
+    Note: this is the *total* acquired-frame expectation (including
+    taxi-in / coast-out frames the AD IOC wrote).  The in-scan
+    paired count can legitimately be smaller; a mismatch is a hint
+    to inspect, not proof of error.  When the source is the lossy
+    CA-monitor stream, however, a shortfall is the expected failure
+    mode this provenance is meant to surface.
+    """
+    if ad_file_path is not None:
+        try:
+            import h5py
+
+            with h5py.File(ad_file_path, "r") as f:
+                if unique_id_dset in f:
+                    return int(f[unique_id_dset].shape[0])
+        except Exception as exc:  # never let provenance break the write
+            logger.debug(
+                "_expected_frame_count: could not read %r from AD file %r: %r",
+                unique_id_dset,
+                ad_file_path,
+                exc,
+            )
+
+    try:
+        md = getattr(run, "metadata", None)
+        start = md["start"] if md is not None else None
+        if isinstance(start, dict) and start.get("num_frames") is not None:
+            return int(start["num_frames"])
+    except Exception as exc:
+        logger.debug(
+            "_expected_frame_count: could not read num_frames from run metadata: %r",
+            exc,
+        )
+    return None
+
+
 # Cam state values (DetectorState_RBV enum) that indicate the cam
 # failed to arm or is otherwise unusable.  Empirically verified on
 # the Eiger 2026-06-16: failed arm transitions to 'Error' within ~2 ms.
@@ -2735,38 +2784,39 @@ def flyscan(
     def update_master_file():
         """Update the NeXus master file once run is complete.
 
-        Three updates, in order:
+        Two updates, in order:
 
         1. Add an HDF5 external link at ``/entry/images`` pointing
            at the IOC's frame file's ``/entry/data`` group.
-        2. Add an ``NXdata`` group at ``/entry/positions`` containing
-           the per-frame motor-position triple
-           (``position_start_acquire`` / ``_end_acquire`` /
-           ``_end_period``) for every in-scan frame, plus
-           ``image_number`` and ``timestamp`` columns, plus a
-           ``frame_index`` dataset (= ``image_number - 1``) that
-           0-based-indexes into ``/entry/images/data`` along its
-           first axis (handles the row-count mismatch: the
-           positions group has only in-scan rows, while the images
-           dataset has all captured frames including taxi/coast).
-           Computed by ``flyscan_3idc_analysis.pair_frames_to_positions``
-           against the just-completed run.
-        3. Add a NeXus-canonical ``NXdata`` group at
-           ``/entry/flyscan_data`` for default plotting.  Group
-           attributes: ``signal="data"``, ``axes=["position_start_acquire"]``.
-           ``data`` is a virtual dataset (``h5py.VirtualLayout`` +
-           ``VirtualSource``) that slices the in-scan substack out
-           of the externally-linked IOC frame file -- so the bytes
-           are not copied; the virtual dataset just describes which
-           rows of the source dataset are in-scan.  Sibling
-           ``position_start_acquire`` / ``position_end_acquire`` /
-           ``position_end_period`` arrays (duplicated from
-           ``/entry/positions`` so this group is self-contained for
-           default plotting).  Also sets ``/entry@default =
-           "flyscan_data"`` so a NeXus-aware viewer opens this group
-           by default (in-scan images vs. motor position is a more
-           useful default view of a flyscan run than whatever
-           apstools NXWriter set originally).
+        2. Add the single primary-product ``NXdata`` group at
+           ``/entry/flyscan_data`` (default plot).  Group
+           attributes: ``signal="data"``,
+           ``axes=["position_start_acquire"]``, plus provenance
+           (``source``, ``n_frames_paired``, ``n_frames_expected``).
+           Contents:
+
+           - ``data``: a virtual dataset (``h5py.VirtualLayout`` +
+             ``VirtualSource``) that slices the in-scan substack out
+             of the externally-linked IOC frame file -- so the bytes
+             are not copied; the virtual dataset just describes which
+             rows of the source dataset are in-scan.
+           - ``position_start_acquire`` / ``position_end_acquire`` /
+             ``position_end_period``: the per-frame motor-position
+             triple used as plot axes.
+           - ``image_number`` / ``frame_index`` / ``timestamp``:
+             subordinate per-frame correlation data.  ``frame_index``
+             (= ``image_number - 1``) 0-based-indexes into the full
+             ``/entry/images/data`` stack along its first axis
+             (handles the row-count mismatch: only in-scan frames are
+             paired here, while the images dataset has all captured
+             frames including taxi/coast).
+
+           All contents are computed by
+           ``flyscan_3idc_analysis.pair_frames_to_positions_from_ad_file``
+           against the AD HDF1 file (the only per-frame source).  Also
+           sets ``/entry@default = "flyscan_data"`` so a NeXus-aware
+           viewer opens this group by default (in-scan images vs. motor
+           position).
 
         Called from ``_main`` after ``takeoff_and_monitor`` returns
         — i.e. after the inner run_decorator has emitted its stop
@@ -2779,10 +2829,10 @@ def flyscan(
         importing them from ``id3c.startup``.  If that import
         fails (id3c not installed, or NEXUS_DATA_FILES.ENABLE
         was False at startup so ``nxwriter`` was never bound), this
-        function is a no-op.  If only the positions-group write
+        function is a no-op.  If only the flyscan_data-group write
         fails (e.g. catalog isn't ingestable, or
-        pair_frames_to_positions raises), the external link is
-        still written and a WARNING is logged.
+        pair_frames_to_positions_from_ad_file raises), the external
+        link is still written and a WARNING is logged.
         """
         # Resolve nxwriter BEFORE any references to it.  Doing the
         # import inside the `if nxwriter is not None:` body (the
@@ -2855,184 +2905,169 @@ def flyscan(
         # one row per acquired frame, so no CA-monitor coalescing
         # gaps).  Step 3 also requires the file for the VirtualLayout.
         external_file_openable = _wait_for_openable(external_file, mode="r")
-        if not external_file_openable:
-            logger.warning(
-                "flyscan._main: external AD HDF1 file %r not openable;"
-                " step 2 will fall back to CA-monitor source and"
-                " step 3 will be skipped.",
-                external_file,
-            )
-
-        # Step 2 of 3: /entry/positions per-frame correlation block.
-        # Skipped (with df=None) if the catalog has no rows yet.
-        df = None  # populated below; needed by step 3 if it runs
+        # /entry/flyscan_data — the single primary product.  One NXdata
+        # group holding the in-scan image substack (VirtualLayout into
+        # the external AD file) plus its per-frame correlation data,
+        # sourced entirely from the AD HDF1 file (the only authoritative,
+        # lossless per-frame source).  If the AD file is not openable we
+        # write nothing and warn; there is no degraded fallback.
+        df = None  # set below only if the AD file paired successfully
         try:
             from id3c.startup import cat
-            from id3c.utils.flyscan_3idc_analysis import pair_frames_to_positions
             from id3c.utils.flyscan_3idc_analysis import (
                 pair_frames_to_positions_from_ad_file,
             )
 
             uid = nxwriter.uid
             run = cat[uid]
-            if external_file_openable:
-                # Preferred: AD file is authoritative and lossless.
-                df = pair_frames_to_positions_from_ad_file(run, external_file)
-            else:
-                df = pair_frames_to_positions(run)
-            if len(df) == 0:
+            if not external_file_openable:
                 logger.warning(
-                    "flyscan._main: pair_frames_to_positions returned"
-                    " 0 rows for uid=%r; skipping steps 2 and 3",
-                    uid,
+                    "flyscan._main: AD file %r is not openable; skipping"
+                    " /entry/flyscan_data.  Fix the image-files symlink"
+                    " next to the master file so it resolves, then re-run"
+                    " the analysis to recover /entry/flyscan_data.",
+                    external_file,
                 )
-                df = None  # disable step 3 too
             else:
-                positions_addr = "/entry/positions"
-                # frame_index = image_number - 1: IOC array_counter is
-                # 1-based, HDF5 dataset axes are 0-based.
-                image_number_arr = df["image_number"].to_numpy()
-                frame_index_arr = image_number_arr - 1
-                with h5py.File(master_file, "a") as root:
-                    if positions_addr in root:
-                        # Defensive: a re-link attempt (shouldn't
-                        # happen normally) should not crash on
-                        # 'name already exists'.
-                        del root[positions_addr]
-                    grp = root.create_group(positions_addr)
-                    grp.attrs["NX_class"] = "NXdata"
-                    grp.attrs["signal"] = "position_start_acquire"
-                    grp.attrs["axes"] = "image_number"
-                    ds_img = grp.create_dataset("image_number", data=image_number_arr)
-                    ds_img.attrs["description"] = (
-                        "IOC-side hdf1.array_counter value at frame"
-                        " capture; 1-based per EPICS areaDetector"
-                        " NDFileHDF5 plugin convention."
+                df = pair_frames_to_positions_from_ad_file(run, external_file)
+                if len(df) == 0:
+                    logger.warning(
+                        "flyscan._main: pair_frames_to_positions_from_ad_file"
+                        " returned 0 rows for uid=%r; skipping"
+                        " /entry/flyscan_data",
+                        uid,
                     )
-                    ds_idx = grp.create_dataset("frame_index", data=frame_index_arr)
-                    ds_idx.attrs["target"] = "/entry/images/data"
-                    ds_idx.attrs["description"] = (
-                        "0-based index into /entry/images/data along"
-                        " its first axis; equal to image_number - 1."
-                        " To slice the in-scan image substack:"
-                        " images = f['/entry/images/data'];"
-                        " idx = f['/entry/positions/frame_index'][:];"
-                        " in_scan_images = images[idx, :, :]"
-                    )
-                    grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
-                    grp.create_dataset(
-                        "position_start_acquire",
-                        data=df["position_start_acquire"].to_numpy(),
-                    )
-                    grp.create_dataset(
-                        "position_end_acquire",
-                        data=df["position_end_acquire"].to_numpy(),
-                    )
-                    grp.create_dataset(
-                        "position_end_period", data=df["position_end_period"].to_numpy()
-                    )
-                logger.info(
-                    "flyscan._main: wrote %d per-frame positions"
-                    " (with frame_index 0-based: %d..%d) into NeXus"
-                    " master file %s:%r",
-                    len(df),
-                    int(frame_index_arr[0]),
-                    int(frame_index_arr[-1]),
-                    master_file,
-                    positions_addr,
-                )
+                    df = None
         except Exception as exc:
             logger.warning(
-                "flyscan._main: /entry/positions write failed in %s:"
-                " %r.  Step 3 will also be skipped.",
+                "flyscan._main: per-frame pairing failed for"
+                " /entry/flyscan_data in %s: %r.  The group will not"
+                " be written.",
                 master_file,
                 exc,
             )
             df = None
 
-        # Step 3 of 3: /entry/flyscan_data NXdata + VirtualLayout into
-        # the external AD HDF1 file.  Skip if Loop B above failed.
         if df is not None:
-            if not external_file_openable:
-                logger.error(
-                    "flyscan._main: external AD HDF1 file %r not"
-                    " openable; skipping /entry/flyscan_data."
-                    " Check that ./ad_files exists and resolves.",
+            try:
+                flyscan_data_addr = "/entry/flyscan_data"
+                # frame_index = image_number - 1: IOC array_counter is
+                # 1-based, HDF5 dataset axes are 0-based.
+                image_number_arr = df["image_number"].to_numpy()
+                frame_index_arr = image_number_arr - 1
+                n_frames_paired = int(len(df))
+                # Expected total acquired-frame count (authoritative AD
+                # file row count).  The in-scan paired count can be
+                # legitimately smaller (taxi-in / coast-out frames);
+                # recorded as provenance for the reader.
+                n_frames_expected = _expected_frame_count(external_file, run)
+                with h5py.File(external_file, "r") as src:
+                    src_ds = src[external_addr + "/data"]
+                    src_shape = src_ds.shape  # (N, H, W)
+                    src_dtype = src_ds.dtype
+                # VirtualLayout: out-shape (n_in_scan, H, W),
+                # each row sourced from src[frame_index[i], :, :].
+                n_in_scan = len(frame_index_arr)
+                out_shape = (n_in_scan,) + tuple(src_shape[1:])
+                layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
+                vsrc = h5py.VirtualSource(
                     external_file,
+                    name=external_addr + "/data",
+                    shape=src_shape,
+                    dtype=src_dtype,
                 )
-            else:
-                try:
-                    flyscan_data_addr = "/entry/flyscan_data"
-                    image_number_arr = df["image_number"].to_numpy()
-                    frame_index_arr = image_number_arr - 1
-                    with h5py.File(external_file, "r") as src:
-                        src_ds = src[external_addr + "/data"]
-                        src_shape = src_ds.shape  # (N, H, W)
-                        src_dtype = src_ds.dtype
-                    # VirtualLayout: out-shape (n_in_scan, H, W),
-                    # each row sourced from src[frame_index[i], :, :].
-                    n_in_scan = len(frame_index_arr)
-                    out_shape = (n_in_scan,) + tuple(src_shape[1:])
-                    layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
-                    vsrc = h5py.VirtualSource(
-                        external_file,
-                        name=external_addr + "/data",
-                        shape=src_shape,
-                        dtype=src_dtype,
-                    )
-                    for out_i, src_i in enumerate(frame_index_arr):
-                        layout[out_i] = vsrc[int(src_i)]
-                    with h5py.File(master_file, "a") as root:
-                        if flyscan_data_addr in root:
-                            del root[flyscan_data_addr]
-                        fs_grp = root.create_group(flyscan_data_addr)
-                        fs_grp.attrs["NX_class"] = "NXdata"
-                        fs_grp.attrs["signal"] = "data"
-                        fs_grp.attrs["axes"] = ["position_start_acquire"]
+                for out_i, src_i in enumerate(frame_index_arr):
+                    layout[out_i] = vsrc[int(src_i)]
+                with h5py.File(master_file, "a") as root:
+                    if flyscan_data_addr in root:
+                        del root[flyscan_data_addr]
+                    fs_grp = root.create_group(flyscan_data_addr)
+                    fs_grp.attrs["NX_class"] = "NXdata"
+                    fs_grp.attrs["signal"] = "data"
+                    fs_grp.attrs["axes"] = ["position_start_acquire"]
 
-                        # Update the path to the NeXus default plot.
-                        root["/entry"].attrs["default"] = "flyscan_data"
+                    # Provenance: this group is sourced entirely from the
+                    # authoritative AD HDF1 file.  Recorded so a reader
+                    # can confirm the source and frame counts from the
+                    # file alone.
+                    fs_grp.attrs["source"] = "ad_file"
+                    fs_grp.attrs["source_description"] = (
+                        "Per-frame data read from the authoritative"
+                        " area-detector HDF1 file (lossless, one row per"
+                        " acquired frame)."
+                    )
+                    fs_grp.attrs["n_frames_paired"] = n_frames_paired
+                    if n_frames_expected is not None:
+                        fs_grp.attrs["n_frames_expected"] = int(n_frames_expected)
 
-                        fs_grp.create_virtual_dataset("data", layout)
-                        # Duplicated from /entry/positions so this
-                        # group is self-contained for default plotting.
-                        fs_grp.create_dataset(
-                            "position_start_acquire",
-                            data=df["position_start_acquire"].to_numpy(),
-                        )
-                        fs_grp.create_dataset(
-                            "position_end_acquire",
-                            data=df["position_end_acquire"].to_numpy(),
-                        )
-                        fs_grp.create_dataset(
-                            "position_end_period",
-                            data=df["position_end_period"].to_numpy(),
-                        )
-                    logger.info(
-                        "flyscan._main: wrote %s (virtual 'data'"
-                        " shape=%r dtype=%r from %s::%s) into %s and set"
-                        " /entry@default='flyscan_data'",
-                        flyscan_data_addr,
-                        out_shape,
-                        src_dtype,
-                        external_file,
-                        external_addr + "/data",
-                        master_file,
+                    # Update the path to the NeXus default plot.
+                    root["/entry"].attrs["default"] = "flyscan_data"
+
+                    # Primary signal: the in-scan image substack.
+                    fs_grp.create_virtual_dataset("data", layout)
+
+                    # Plot axes (the position arrays).
+                    fs_grp.create_dataset(
+                        "position_start_acquire",
+                        data=df["position_start_acquire"].to_numpy(),
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "flyscan._main: failed to write"
-                        " /entry/flyscan_data VirtualLayout into NeXus"
-                        " master file %s: %r.  The master file is"
-                        " otherwise intact (external link"
-                        " /entry/images and per-frame correlation"
-                        " /entry/positions have both been written);"
-                        " the default-plot annotation"
-                        " (/entry@default='flyscan_data') is also"
-                        " not set.",
-                        master_file,
-                        exc,
+                    fs_grp.create_dataset(
+                        "position_end_acquire",
+                        data=df["position_end_acquire"].to_numpy(),
                     )
+                    fs_grp.create_dataset(
+                        "position_end_period",
+                        data=df["position_end_period"].to_numpy(),
+                    )
+
+                    # Subordinate per-frame correlation data.
+                    ds_img = fs_grp.create_dataset(
+                        "image_number", data=image_number_arr
+                    )
+                    ds_img.attrs["description"] = (
+                        "IOC-side hdf1.array_counter value at frame"
+                        " capture; 1-based per EPICS areaDetector"
+                        " NDFileHDF5 plugin convention."
+                    )
+                    ds_idx = fs_grp.create_dataset("frame_index", data=frame_index_arr)
+                    ds_idx.attrs["target"] = "/entry/images/data"
+                    ds_idx.attrs["description"] = (
+                        "0-based index into /entry/images/data along"
+                        " its first axis; equal to image_number - 1."
+                        " /entry/flyscan_data/data is already this"
+                        " substack; use frame_index only to map back to"
+                        " the full /entry/images/data stack:"
+                        " images = f['/entry/images/data'];"
+                        " idx = f['/entry/flyscan_data/frame_index'][:];"
+                        " in_scan_images = images[idx, :, :]"
+                    )
+                    fs_grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
+                logger.info(
+                    "flyscan._main: wrote %s (virtual 'data'"
+                    " shape=%r dtype=%r from %s::%s, %d in-scan frame(s),"
+                    " frame_index 0-based %d..%d) into %s and set"
+                    " /entry@default='flyscan_data'",
+                    flyscan_data_addr,
+                    out_shape,
+                    src_dtype,
+                    external_file,
+                    external_addr + "/data",
+                    n_frames_paired,
+                    int(frame_index_arr[0]),
+                    int(frame_index_arr[-1]),
+                    master_file,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "flyscan._main: failed to write"
+                    " /entry/flyscan_data into NeXus master file %s:"
+                    " %r.  The master file is otherwise intact (the"
+                    " external link /entry/images has been written);"
+                    " the default-plot annotation"
+                    " (/entry@default='flyscan_data') is not set.",
+                    master_file,
+                    exc,
+                )
 
     def _main():
         """Preparation (no data collection) and takeoff (data collection)."""
