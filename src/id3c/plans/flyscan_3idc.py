@@ -139,6 +139,16 @@ if not logger.handlers and not logging.getLogger().handlers:
     logger.propagate = False
 
 
+# Banner wrapped around the message text of any log record reporting that
+# the flyscan's primary product (/entry/flyscan_data) was not written.
+# The console handler is intentionally terse (it shows only the level's
+# first letter, e.g. "E"), so a level bump alone is easy to miss amid the
+# surrounding INFO chatter.  Embedding this marker in the message itself
+# makes the failure conspicuous in both the terse console and the verbose
+# log file.
+_FLYSCAN_DATA_BANNER = "!!!!! flyscan_data NOT WRITTEN !!!!!"
+
+
 # ---------------------------------------------------------------------------
 # Module-level tunable timing constants.
 #
@@ -1478,7 +1488,7 @@ def _expected_frame_count(
     ad_file_path,
     run,
     *,
-    unique_id_dset="/entry/instrument/NDAttributes/NDArrayUniqueId",
+    unique_id_dset="/entry/instrument/detector/NDAttributes/NDArrayUniqueId",
 ):
     """Best-effort total acquired-frame count, for provenance.
 
@@ -2957,30 +2967,39 @@ def flyscan(
             uid = nxwriter.uid
             run = cat[uid]
             if not external_file_openable:
-                logger.warning(
-                    "flyscan._main: AD file %r is not openable; skipping"
-                    " /entry/flyscan_data.  Fix the image-files symlink"
-                    " next to the master file so it resolves, then re-run"
-                    " the analysis to recover /entry/flyscan_data.",
+                logger.error(
+                    "%s flyscan._main: AD file %r is not openable; the"
+                    " primary product /entry/flyscan_data was NOT written."
+                    "  Fix the image-files symlink next to the master file"
+                    " so it resolves, then run flyscan-repair to recover"
+                    " /entry/flyscan_data. %s",
+                    _FLYSCAN_DATA_BANNER,
                     external_file,
+                    _FLYSCAN_DATA_BANNER,
                 )
             else:
                 df = pair_frames_to_positions_from_ad_file(run, external_file)
                 if len(df) == 0:
-                    logger.warning(
-                        "flyscan._main: pair_frames_to_positions_from_ad_file"
-                        " returned 0 rows for uid=%r; skipping"
-                        " /entry/flyscan_data",
+                    logger.error(
+                        "%s flyscan._main:"
+                        " pair_frames_to_positions_from_ad_file returned 0"
+                        " rows for uid=%r; the primary product"
+                        " /entry/flyscan_data was NOT written. %s",
+                        _FLYSCAN_DATA_BANNER,
                         uid,
+                        _FLYSCAN_DATA_BANNER,
                     )
                     df = None
         except Exception as exc:
-            logger.warning(
-                "flyscan._main: per-frame pairing failed for"
-                " /entry/flyscan_data in %s: %r.  The group will not"
-                " be written.",
+            logger.error(
+                "%s flyscan._main: per-frame pairing failed for"
+                " /entry/flyscan_data in %s: %r.  The primary product"
+                " /entry/flyscan_data was NOT written; run flyscan-repair"
+                " to recover it. %s",
+                _FLYSCAN_DATA_BANNER,
                 master_file,
                 exc,
+                _FLYSCAN_DATA_BANNER,
             )
             df = None
 
@@ -3001,15 +3020,19 @@ def flyscan(
                     n_frames_expected=n_frames_expected,
                 )
             except Exception as exc:
-                logger.warning(
-                    "flyscan._main: failed to write"
+                logger.error(
+                    "%s flyscan._main: failed to write"
                     " /entry/flyscan_data into NeXus master file %s:"
                     " %r.  The master file is otherwise intact (the"
-                    " external link /entry/images has been written);"
-                    " the default-plot annotation"
-                    " (/entry@default='flyscan_data') is not set.",
+                    " external link /entry/images has been written), but"
+                    " the primary product /entry/flyscan_data was NOT"
+                    " written and the default-plot annotation"
+                    " (/entry@default='flyscan_data') is not set;"
+                    " run flyscan-repair to recover it. %s",
+                    _FLYSCAN_DATA_BANNER,
                     master_file,
                     exc,
+                    _FLYSCAN_DATA_BANNER,
                 )
 
     def _main():

@@ -55,12 +55,12 @@ def _write_ad_file(path, ad_unix_t, unique_ids):
     """Build a synthetic AD HDF1 file at ``path``.
 
     Stores ``ad_unix_t`` (Unix-epoch seconds) converted to EPICS
-    epoch in /entry/instrument/NDAttributes/NDArrayTimeStamp,
+    epoch in /entry/instrument/detector/NDAttributes/NDArrayTimeStamp,
     and ``unique_ids`` in NDArrayUniqueId.
     """
     epics_t = np.asarray(ad_unix_t, dtype=float) - EPICS_EPOCH_OFFSET_S
     with h5py.File(path, "w") as f:
-        grp = f.create_group("/entry/instrument/NDAttributes")
+        grp = f.create_group("/entry/instrument/detector/NDAttributes")
         grp.create_dataset("NDArrayTimeStamp", data=epics_t)
         grp.create_dataset(
             "NDArrayUniqueId", data=np.asarray(unique_ids, dtype=np.int32)
@@ -162,9 +162,9 @@ def test_missing_timestamp_dataset_raises(tmp_path):
     """A file without the timestamp dataset raises KeyError."""
     ad_file = tmp_path / "ad.h5"
     with h5py.File(ad_file, "w") as f:
-        f.create_group("/entry/instrument/NDAttributes")
+        f.create_group("/entry/instrument/detector/NDAttributes")
         # Only UID, no timestamp.
-        f["/entry/instrument/NDAttributes"].create_dataset(
+        f["/entry/instrument/detector/NDAttributes"].create_dataset(
             "NDArrayUniqueId", data=np.array([0, 1, 2], dtype=np.int32)
         )
 
@@ -186,7 +186,7 @@ def test_missing_unique_id_dataset_raises(tmp_path):
     """A file without the UID dataset raises KeyError."""
     ad_file = tmp_path / "ad.h5"
     with h5py.File(ad_file, "w") as f:
-        grp = f.create_group("/entry/instrument/NDAttributes")
+        grp = f.create_group("/entry/instrument/detector/NDAttributes")
         grp.create_dataset("NDArrayTimeStamp", data=np.array([1.0, 2.0, 3.0]))
 
     motor_t = np.linspace(0.0, 10.0, 11)
@@ -207,7 +207,7 @@ def test_mismatched_lengths_raise(tmp_path):
     """timestamp + UID arrays of different length raise ValueError."""
     ad_file = tmp_path / "ad.h5"
     with h5py.File(ad_file, "w") as f:
-        grp = f.create_group("/entry/instrument/NDAttributes")
+        grp = f.create_group("/entry/instrument/detector/NDAttributes")
         grp.create_dataset("NDArrayTimeStamp", data=np.array([1.0, 2.0, 3.0]))
         grp.create_dataset("NDArrayUniqueId", data=np.array([0, 1], dtype=np.int32))
 
