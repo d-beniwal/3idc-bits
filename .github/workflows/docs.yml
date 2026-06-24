@@ -30,7 +30,7 @@ jobs:
     # on main (see the 'deploy' job).
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
