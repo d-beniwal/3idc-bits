@@ -200,6 +200,32 @@ methods, or plan methods on the bundle itself.  Example:
   yet validated end-to-end.  When writing docs that show image reads,
   flag this honestly.
 
+### NeXus layout of area-detector HDF5 files
+
+All 3-ID-C area detectors write NeXus-structured HDF5 with the same
+layout.  The detector content lives in a `detector:NXdetector` group
+**inside** the `instrument:NXinstrument` group, so the authoritative
+path to per-frame detector content begins with
+`/entry/instrument/detector`:
+
+```
+/entry/instrument/detector/data                          # image stack
+/entry/instrument/detector/NDAttributes/NDArrayTimeStamp
+/entry/instrument/detector/NDAttributes/NDArrayUniqueId
+/entry/instrument/detector/NDAttributes/NDArrayEpicsTSSec
+/entry/instrument/detector/NDAttributes/NDArrayEpicsTSnSec
+```
+
+An HDF5 **hard link** makes the image stack also appear under
+`/entry/data` (e.g. `/entry/data/data`).  Do **not** assume a flatter
+layout: the NDAttributes group is at
+`/entry/instrument/detector/NDAttributes/`, never at
+`/entry/instrument/NDAttributes/`.  Any code that reads per-frame
+`NDArrayTimeStamp` / `NDArrayUniqueId` (flyscan frame-to-position
+pairing, expected-frame-count, repair tooling) must use the
+`/entry/instrument/detector/...` prefix.  Verify this prefix wherever
+such a dataset path is hard-coded.
+
 ## Working style
 
 These are imported from the user's host-wide notes

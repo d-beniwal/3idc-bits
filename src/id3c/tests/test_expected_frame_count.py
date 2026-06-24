@@ -19,7 +19,7 @@ import numpy as np
 
 from id3c.plans.flyscan_3idc import _expected_frame_count
 
-UID_DSET = "/entry/instrument/NDAttributes/NDArrayUniqueId"
+UID_DSET = "/entry/instrument/detector/NDAttributes/NDArrayUniqueId"
 
 
 def _write_ad_file(path, n_frames):

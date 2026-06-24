@@ -172,7 +172,7 @@ def repair_master_file(master_file, *, external_file=None, dry_run=False):
 
 def _ad_frame_count(
     external_file,
-    unique_id_dset="/entry/instrument/NDAttributes/NDArrayUniqueId",
+    unique_id_dset="/entry/instrument/detector/NDAttributes/NDArrayUniqueId",
 ):
     """Total acquired-frame count from the AD file, or None."""
     import h5py

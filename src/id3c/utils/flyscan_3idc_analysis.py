@@ -404,8 +404,8 @@ def pair_frames_to_positions_from_ad_file(
     run,
     ad_file_path,
     *,
-    timestamp_dset="/entry/instrument/NDAttributes/NDArrayTimeStamp",
-    unique_id_dset="/entry/instrument/NDAttributes/NDArrayUniqueId",
+    timestamp_dset="/entry/instrument/detector/NDAttributes/NDArrayTimeStamp",
+    unique_id_dset="/entry/instrument/detector/NDAttributes/NDArrayUniqueId",
 ) -> pd.DataFrame:
     """Pair frames with motor positions, sourcing timestamps from the AD file.
 

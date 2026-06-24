@@ -14,8 +14,8 @@ from id3c.utils import flyscan_repair
 from id3c.utils.flyscan_3idc_analysis import EPICS_EPOCH_OFFSET_S
 
 UID = "abc123de-0000-1111-2222-333344445555"
-UID_DSET = "/entry/instrument/NDAttributes/NDArrayUniqueId"
-TS_DSET = "/entry/instrument/NDAttributes/NDArrayTimeStamp"
+UID_DSET = "/entry/instrument/detector/NDAttributes/NDArrayUniqueId"
+TS_DSET = "/entry/instrument/detector/NDAttributes/NDArrayTimeStamp"
 
 
 def _write_ad_file(path, n_frames=5, h=4, w=6, t_acquire=0.5, t0=1000.0):
@@ -24,7 +24,7 @@ def _write_ad_file(path, n_frames=5, h=4, w=6, t_acquire=0.5, t0=1000.0):
     epics_t = ad_unix_t - EPICS_EPOCH_OFFSET_S
     with h5py.File(path, "w") as f:
         f.create_dataset("/entry/data/data", data=np.zeros((n_frames, h, w), "uint16"))
-        grp = f.create_group("/entry/instrument/NDAttributes")
+        grp = f.create_group("/entry/instrument/detector/NDAttributes")
         grp.create_dataset("NDArrayTimeStamp", data=epics_t)
         grp.create_dataset("NDArrayUniqueId", data=np.arange(n_frames, dtype=np.int32))
     return ad_unix_t
