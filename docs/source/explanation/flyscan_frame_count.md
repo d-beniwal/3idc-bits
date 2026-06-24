@@ -20,39 +20,43 @@ completes, the plan writes the frame-to-position pairing **into the
 NeXus master HDF5 file** (the `*.hdf` file in your run directory).
 Look here:
 
-`/entry/positions` (an `NXdata` group)
-: The per-frame correlation table, with **one row per in-scan frame**
-  (the pre-roll and tail frames are already excluded -- so this group
-  has your 301 rows, not 306).  Datasets:
+`/entry/flyscan_data` (an `NXdata` group, the **default plot** and the
+single primary product)
+: A ready-to-plot view of the in-scan data, with **one row per in-scan
+  frame** (the pre-roll and tail frames are already excluded -- so this
+  group has your 301 rows, not 306).  Its `data` is a *virtual* dataset
+  (no bytes copied) that already slices the in-scan 301-frame substack
+  out of the full image stack, with `position_start_acquire` as its
+  plot axis.  The plan also sets `/entry@default = "flyscan_data"`, so a
+  NeXus-aware viewer (e.g. NeXpy, h5web) opens this group by default --
+  in-scan images vs. omega position, which is the useful default view of
+  a flyscan.  Datasets:
 
+  - `data` -- the in-scan image substack (virtual dataset).
+  - `position_start_acquire`, `position_end_acquire`,
+    `position_end_period` -- the motor (omega) position at three
+    phases of each frame's exposure period (the plot axes).
   - `image_number` -- IOC frame counter (1-based) for each in-scan
     frame.
   - `frame_index` -- `image_number - 1`; the **0-based index into
-    `/entry/images/data`** for that frame.  Use it to pull the in-scan
-    image substack out of the full (306-frame) image stack:
+    `/entry/images/data`** for that frame.  `data` is already this
+    substack; use `frame_index` only to map back to the full
+    (306-frame) image stack:
 
     ```python
     import h5py
     with h5py.File("20260618-...-S00031-....hdf", "r") as f:
-        images = f["/entry/images/data"]           # all captured frames
-        idx = f["/entry/positions/frame_index"][:] # in-scan frames only
-        in_scan_images = images[idx, :, :]         # the useful 301
-        omega = f["/entry/positions/position_start_acquire"][:]
+        images = f["/entry/images/data"]               # all captured frames
+        idx = f["/entry/flyscan_data/frame_index"][:]  # in-scan frames only
+        in_scan_images = images[idx, :, :]             # the useful 301
+        omega = f["/entry/flyscan_data/position_start_acquire"][:]
     ```
 
-  - `position_start_acquire`, `position_end_acquire`,
-    `position_end_period` -- the motor (omega) position at three
-    phases of each frame's exposure period.
   - `timestamp` -- per-frame timestamp.
 
-`/entry/flyscan_data` (an `NXdata` group, the **default plot**)
-: A ready-to-plot view of the same in-scan data.  Its `data` is a
-  *virtual* dataset (no bytes copied) that already slices the in-scan
-  301-frame substack out of the full image stack, with
-  `position_start_acquire` as its plot axis.  The plan also sets
-  `/entry@default = "flyscan_data"`, so a NeXus-aware viewer
-  (e.g. NeXpy, h5web) opens this group by default -- in-scan images
-  vs. omega position, which is the useful default view of a flyscan.
+  Provenance group attributes record that the data came from the
+  authoritative area-detector file: `source = "ad_file"`,
+  `n_frames_paired`, and `n_frames_expected`.
 
 `/entry/images` (an external link)
 : An HDF5 external link to the detector IOC's frame file at its
@@ -60,17 +64,18 @@ Look here:
   including the pre-roll and tail frames.  This is the dataset whose
   length is 306, not 301.
 
-So: read `/entry/flyscan_data` (or `/entry/positions`) for the paired,
-trimmed result; read `/entry/images` only if you specifically want the
-raw superset.
+So: read `/entry/flyscan_data` for the paired, trimmed result; read
+`/entry/images` only if you specifically want the raw superset.
 
 :::{note}
-These groups are written best-effort at the end of the run.  If the
-Tiled catalog hadn't ingested the run yet, or the IOC frame file
-wasn't readable from the master-file host, you may see only
-`/entry/images` (the external link) with a `WARNING` in the log and no
-`/entry/positions` / `/entry/flyscan_data`.  In that case re-run the
-pairing yourself with the analysis functions linked below.
+`/entry/flyscan_data` is written best-effort at the end of the run, and
+**only** from the area-detector file.  If the Tiled catalog hasn't
+ingested the run yet, or the IOC frame file isn't readable from the
+master-file host (most commonly: the per-detector image-files symlink
+next to the master is missing or mis-shaped), you will see only
+`/entry/images` (the external link) with a `WARNING` in the log and
+**no** `/entry/flyscan_data`.  In that case fix the symlink and re-run
+the pairing yourself with the analysis function linked below.
 :::
 
 :::{admonition} Keep this page in sync with the code
@@ -93,11 +98,10 @@ page in the same commit:
   `hdf_num_capture = int(num_frames * 1.5) + 20` in `flyscan`
   ([`flyscan_3idc.py`](../../../src/id3c/plans/flyscan_3idc.py)).
 - Frame-to-position pairing (the thing that selects the useful
-  frames): `pair_frames_to_positions` and
-  `pair_frames_to_positions_from_ad_file` in
+  frames): `pair_frames_to_positions_from_ad_file` in
   [`flyscan_3idc_analysis.py`](../../../src/id3c/utils/flyscan_3idc_analysis.py).
-- Master-file HDF5 layout written at run end (`/entry/positions`,
-  `/entry/flyscan_data`, `/entry/images`, and `/entry@default`):
+- Master-file HDF5 layout written at run end (`/entry/flyscan_data`,
+  `/entry/images`, and `/entry@default`):
   `update_master_file` in
   [`flyscan_3idc.py`](../../../src/id3c/plans/flyscan_3idc.py).  If you
   rename or restructure any of those groups/datasets, update the
@@ -194,15 +198,15 @@ Do **not** expect the raw `/entry/data` dataset to equal `num_frames`.
 The raw file is the superset; the *useful* frames are selected by
 pairing each frame to the omega position it was exposed at:
 
-- `pair_frames_to_positions(run)` -- from a Bluesky run / Tiled.
 - `pair_frames_to_positions_from_ad_file(...)` -- directly from the
-  area-detector HDF5 file.
+  area-detector HDF5 file (the authoritative, lossless source used by
+  the plan).
 
-Both live in
+It lives in
 [`flyscan_3idc_analysis.py`](../../../src/id3c/utils/flyscan_3idc_analysis.py).
-They use the IOC-timestamped frame stream together with the motor's
-position stream to drop the pre-roll and tail frames and attach the
-correct omega value to each remaining frame.  The result is the 301
+It uses the area-detector file's per-frame timestamps together with the
+motor's position stream to drop the pre-roll and tail frames and attach
+the correct omega value to each remaining frame.  The result is the 301
 position-paired frames that span `p_start -> p_end`.
 
 ## What this does *not* mean

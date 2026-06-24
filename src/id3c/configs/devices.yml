@@ -63,7 +63,7 @@ apstools.devices.motor_factory.mb_creator:
   class_name: DetectorStage
   motors:
     det_x: "3idc:m69"  # translation
-    eiger_y: "3idc:m35"  # translation Eiger2
+    eiger_y: "3idc:m70"  # translation Eiger2
     eiger_z: "3idc:m36"  # translation Eiger2
 
 # laser_optics axes are interlocked against sample_stage.omega (both

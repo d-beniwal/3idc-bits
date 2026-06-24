@@ -40,18 +40,14 @@ docstring for the procedure.
 Design notes
 ------------
 
-- IOC timestamps are the system of record for pairing (per the
-  ``flyscan_3idc`` strategy doc, Phase 0.2 / Phase 0e).  The
+- IOC timestamps are the system of record for pairing.  The
   primary-stream snapshots from the plan are a progress indicator;
   this module's output is the high-fidelity pairing.
-- Empirically (verified during the 2026-06-08 commissioning
-  session against ``adsimdet`` + ``gp:m1``):
-  - the m1 monitor stream's record-order is interleaved across
-    multiple CA dispatcher segments; sorting by timestamp yields
-    a strictly increasing position trace at constant velocity in
-    the in-scan window.
-  - the HDF array_counter monitor stream's record-order is also
-    interleaved, but sorting by timestamp yields strictly
+- Monitor-stream record order is interleaved across CA dispatcher
+  segments, so sort by timestamp:
+  - the motor monitor stream then yields a strictly increasing
+    position trace at constant velocity in the in-scan window.
+  - the HDF array_counter monitor stream then yields strictly
     monotonic counter values (0, 1, 2, ..., contiguous).
 - The function uses linear interpolation of motor position vs
   motor IOC timestamp.  Linear is exact for a motor at constant
@@ -126,8 +122,7 @@ def _interpolate_positions(
         OVERLAPS the time window during which the motor was inside
         ``[p_start, p_end]``.  That window is bracketed by the first
         and last motor-stream samples whose position lies in
-        ``[p_start, p_end]``.  This widening (over the older
-        "position_start_acquire inside [p_start, p_end]" rule) admits
+        ``[p_start, p_end]``.  The time-overlap rule admits
         leading-edge and trailing-edge frames whose exposure crossed
         a boundary mid-way, as well as frames that fell on the
         wrong side of the boundary only due to motor-stream
@@ -144,9 +139,8 @@ def _interpolate_positions(
         (``hdf_t`` arrives at or after the frame's cam-end-of-
         exposure event; ``start_acquire`` is one t_acquire earlier).
         See ``hdf_timestamp_semantic_diagnostic`` to determine the
-        right value empirically; ``flyscan_3idc.build_flyscan_md``
-        defaults this to ``-t_acquire`` (the value Phase 0 derived
-        for the gp:m1 + adsimdet IOC).
+        right value for an IOC; ``flyscan_3idc.build_flyscan_md``
+        defaults this to ``-t_acquire``.
 
     Returns
     -------
@@ -274,9 +268,9 @@ def _interpolate_positions(
     # A frame is "in scan" if the time interval over which it was
     # exposing/holding ([start_acquire.t, end_period.t]) OVERLAPS the
     # time window during which the motor was inside [p_start, p_end].
-    # This is a deliberate widening over the older
-    # "position_start_acquire inside [p_start, p_end]" rule, which
-    # over-rejected three classes of frame:
+    # The time-overlap rule (rather than testing a single position
+    # against [p_start, p_end]) admits three classes of frame that
+    # carry valid in-range data:
     #
     #   1. Leading-edge: exposure started just before p_start but
     #      crossed p_start before end_acquire.  The frame DOES carry
@@ -297,14 +291,12 @@ def _interpolate_positions(
     #
     # Frames that never overlapped the window at all (taxi-in / coast-
     # out frames whose entire [start_acquire, end_period] falls before
-    # the first in-range motor sample or after the last) are still
-    # dropped, which is the correct behaviour for the original taxi /
-    # coast rejection use case.
+    # the first in-range motor sample or after the last) are dropped:
+    # they carry no in-range data.
     in_range_pos = (m_p >= p_start) & (m_p <= p_end)
     if not in_range_pos.any():
         # The motor never entered the scan range in this run; reject
-        # every frame.  This branch was implicitly handled before by
-        # the strict-position check; preserved here for symmetry.
+        # every frame.
         in_scan = np.zeros_like(ts_start, dtype=bool)
         motor_t_in_range_start = None
         motor_t_in_range_end = None
@@ -1052,4 +1044,152 @@ def hdf_timestamp_semantic_diagnostic(run) -> dict:
         "sparse_data": sparse_data,
         "noisy_data": noisy_data,
         "indecisive": indecisive,
+    }
+
+
+def write_flyscan_data(
+    master_file,
+    external_file,
+    df,
+    *,
+    external_addr="/entry/data",
+    n_frames_expected=None,
+):
+    """Write the ``/entry/flyscan_data`` group into the NeXus master file.
+
+    This is the single primary-product group: an ``NXdata`` holding the
+    in-scan image substack (an ``h5py.VirtualLayout`` into the external
+    area-detector file, no bytes copied) plus the per-frame correlation
+    data, all from the authoritative AD HDF1 file.
+
+    Both the live flyscan plan and the offline repair tool call this so
+    the on-disk layout is identical regardless of when it is written.
+    Any pre-existing ``/entry/flyscan_data`` is replaced (idempotent).
+
+    Parameters
+    ----------
+    master_file : str
+        Path to the NeXus master HDF5 file (opened for append).
+    external_file : str
+        Path to the area-detector HDF1 file, resolvable from the
+        master file's directory (i.e. through the image-files symlink).
+    df : pandas.DataFrame
+        Output of ``pair_frames_to_positions_from_ad_file``; one row
+        per in-scan frame with ``image_number``, ``timestamp``, and the
+        three ``position_*`` columns.
+    external_addr : str
+        Group inside ``external_file`` holding ``data`` (the image
+        stack).  Defaults to ``/entry/data``.
+    n_frames_expected : int or None
+        Total acquired-frame count, recorded as provenance.  ``None``
+        omits the attribute.
+
+    Returns
+    -------
+    dict
+        Summary: ``n_frames_paired``, ``out_shape``, ``src_dtype``.
+    """
+    import h5py
+
+    flyscan_data_addr = "/entry/flyscan_data"
+    # frame_index = image_number - 1: IOC array_counter is 1-based,
+    # HDF5 dataset axes are 0-based.
+    image_number_arr = df["image_number"].to_numpy()
+    frame_index_arr = image_number_arr - 1
+    n_frames_paired = int(len(df))
+
+    with h5py.File(external_file, "r") as src:
+        src_ds = src[external_addr + "/data"]
+        src_shape = src_ds.shape  # (N, H, W)
+        src_dtype = src_ds.dtype
+    # VirtualLayout: out-shape (n_in_scan, H, W), each row sourced
+    # from src[frame_index[i], :, :].
+    n_in_scan = len(frame_index_arr)
+    out_shape = (n_in_scan,) + tuple(src_shape[1:])
+    layout = h5py.VirtualLayout(shape=out_shape, dtype=src_dtype)
+    vsrc = h5py.VirtualSource(
+        external_file,
+        name=external_addr + "/data",
+        shape=src_shape,
+        dtype=src_dtype,
+    )
+    for out_i, src_i in enumerate(frame_index_arr):
+        layout[out_i] = vsrc[int(src_i)]
+
+    with h5py.File(master_file, "a") as root:
+        if flyscan_data_addr in root:
+            del root[flyscan_data_addr]
+        fs_grp = root.create_group(flyscan_data_addr)
+        fs_grp.attrs["NX_class"] = "NXdata"
+        fs_grp.attrs["signal"] = "data"
+        fs_grp.attrs["axes"] = ["position_start_acquire"]
+
+        # Provenance: this group is sourced entirely from the
+        # authoritative AD HDF1 file.
+        fs_grp.attrs["source"] = "ad_file"
+        fs_grp.attrs["source_description"] = (
+            "Per-frame data read from the authoritative area-detector"
+            " HDF1 file (lossless, one row per acquired frame)."
+        )
+        fs_grp.attrs["n_frames_paired"] = n_frames_paired
+        if n_frames_expected is not None:
+            fs_grp.attrs["n_frames_expected"] = int(n_frames_expected)
+
+        # Update the path to the NeXus default plot.
+        root["/entry"].attrs["default"] = "flyscan_data"
+
+        # Primary signal: the in-scan image substack.
+        fs_grp.create_virtual_dataset("data", layout)
+
+        # Plot axes (the position arrays).
+        fs_grp.create_dataset(
+            "position_start_acquire",
+            data=df["position_start_acquire"].to_numpy(),
+        )
+        fs_grp.create_dataset(
+            "position_end_acquire",
+            data=df["position_end_acquire"].to_numpy(),
+        )
+        fs_grp.create_dataset(
+            "position_end_period",
+            data=df["position_end_period"].to_numpy(),
+        )
+
+        # Subordinate per-frame correlation data.
+        ds_img = fs_grp.create_dataset("image_number", data=image_number_arr)
+        ds_img.attrs["description"] = (
+            "IOC-side hdf1.array_counter value at frame capture; 1-based"
+            " per EPICS areaDetector NDFileHDF5 plugin convention."
+        )
+        ds_idx = fs_grp.create_dataset("frame_index", data=frame_index_arr)
+        ds_idx.attrs["target"] = "/entry/images/data"
+        ds_idx.attrs["description"] = (
+            "0-based index into /entry/images/data along its first axis;"
+            " equal to image_number - 1.  /entry/flyscan_data/data is"
+            " already this substack; use frame_index only to map back to"
+            " the full /entry/images/data stack:"
+            " images = f['/entry/images/data'];"
+            " idx = f['/entry/flyscan_data/frame_index'][:];"
+            " in_scan_images = images[idx, :, :]"
+        )
+        fs_grp.create_dataset("timestamp", data=df["timestamp"].to_numpy())
+
+    logger.info(
+        "write_flyscan_data: wrote %s (virtual 'data' shape=%r dtype=%r"
+        " from %s::%s, %d in-scan frame(s), frame_index 0-based %d..%d)"
+        " into %s and set /entry@default='flyscan_data'",
+        flyscan_data_addr,
+        out_shape,
+        src_dtype,
+        external_file,
+        external_addr + "/data",
+        n_frames_paired,
+        int(frame_index_arr[0]),
+        int(frame_index_arr[-1]),
+        master_file,
+    )
+    return {
+        "n_frames_paired": n_frames_paired,
+        "out_shape": out_shape,
+        "src_dtype": src_dtype,
     }
