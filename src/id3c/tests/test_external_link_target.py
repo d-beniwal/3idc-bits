@@ -10,26 +10,26 @@ from types import SimpleNamespace
 from id3c.plans.flyscan_3idc import _external_link_target
 
 
-def _make_hdf1(full_file_name, write_path_template=None):
-    """Build a duck-typed ``det.hdf1`` for the helper."""
+def _make_hdf1(full_file_name, write_path_template=None, name="eiger2"):
+    """Build a duck-typed ``det`` (with ``.name`` and ``.hdf1``)."""
     sig = SimpleNamespace(get=lambda use_monitor=False: full_file_name)
     hdf1 = SimpleNamespace(full_file_name=sig)
     if write_path_template is not None:
         hdf1.write_path_template = write_path_template
-    return SimpleNamespace(hdf1=hdf1)
+    return SimpleNamespace(name=name, hdf1=hdf1)
 
 
 def test_strips_write_path_template_prefix():
     """write_path_template prefix is stripped from full_file_name.
 
-    The remaining common suffix is appended to ad_files_root.
+    The remaining common suffix is appended to the per-detector root.
     """
     det = _make_hdf1(
         full_file_name="/home/sector3/s3ida/XRD/2026-2/setup/Jun15/foo.h5",
         write_path_template="/home/sector3/s3ida/XRD/",
     )
     target = _external_link_target(det)
-    assert target == "./ad_files/2026-2/setup/Jun15/foo.h5"
+    assert target == "./eiger2_files/2026-2/setup/Jun15/foo.h5"
 
 
 def test_handles_template_without_trailing_slash():
@@ -39,7 +39,7 @@ def test_handles_template_without_trailing_slash():
         write_path_template="/home/sector3/s3ida/XRD",  # no trailing /
     )
     target = _external_link_target(det)
-    assert target == "./ad_files/2026-2/setup/Jun15/foo.h5"
+    assert target == "./eiger2_files/2026-2/setup/Jun15/foo.h5"
 
 
 def test_custom_ad_files_root():
@@ -63,8 +63,8 @@ def test_falls_back_when_template_missing(caplog):
     )
     with caplog.at_level("WARNING", logger="id3c.plans.flyscan_3idc"):
         target = _external_link_target(det)
-    # Legacy form: ad_files + the full absolute path (without leading /).
-    assert target == "./ad_files/home/sector3/s3ida/XRD/2026-2/setup/Jun15/foo.h5"
+    # Legacy form: per-det root + the full absolute path (no leading /).
+    assert target == "./eiger2_files/home/sector3/s3ida/XRD/2026-2/setup/Jun15/foo.h5"
     assert any(
         "write_path_template not available" in rec.message for rec in caplog.records
     )
@@ -81,7 +81,7 @@ def test_falls_back_when_template_does_not_prefix_full_file_name(caplog):
     )
     with caplog.at_level("WARNING", logger="id3c.plans.flyscan_3idc"):
         target = _external_link_target(det)
-    assert target == "./ad_files/some/other/path/foo.h5"
+    assert target == "./eiger2_files/some/other/path/foo.h5"
     assert any("does not prefix" in rec.message for rec in caplog.records)
 
 
@@ -95,7 +95,7 @@ def test_template_equal_to_full_file_name_yields_empty_suffix():
         write_path_template="/home/sector3/s3ida/XRD/",
     )
     target = _external_link_target(det)
-    assert target == "./ad_files/"
+    assert target == "./eiger2_files/"
 
 
 def test_uses_underscore_write_path_template_fallback():
@@ -107,6 +107,6 @@ def test_uses_underscore_write_path_template_fallback():
         full_file_name=sig,
         _write_path_template="/home/sector3/s3ida/XRD/",
     )
-    det = SimpleNamespace(hdf1=hdf1)
+    det = SimpleNamespace(name="eiger2", hdf1=hdf1)
     target = _external_link_target(det)
-    assert target == "./ad_files/foo.h5"
+    assert target == "./eiger2_files/foo.h5"

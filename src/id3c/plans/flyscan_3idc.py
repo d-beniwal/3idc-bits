@@ -77,17 +77,24 @@ from ophyd.status import AndStatus
 from ophyd.status import SubscriptionStatus
 from ophyd.utils.errors import WaitTimeoutError
 
-AD_FILES_DIRNAME = "ad_files"
-"""Name of the directory/symlink the external link target traverses.
 
-Adjacent to the NeXus master file.
-"""
+def ad_files_dirname(det):
+    """Name of the image-files symlink adjacent to the master file.
 
-AD_FILES_ROOT = f"./{AD_FILES_DIRNAME}/"
-"""Relative-link root for the master's external link to the AD HDF1 file.
+    Per detector: ``"{det.name}_files"`` (e.g. ``eiger2_files``).  A
+    beamline with several area detectors can give each its own root.
+    """
+    return f"{det.name}_files"
 
-MUST stay relative (portability).  See ``_external_link_target``.
-"""
+
+def ad_files_root_for(det):
+    """Relative-link root for the master's external link to the AD file.
+
+    ``"./{det.name}_files/"``.  MUST stay relative (portability).
+    See ``_external_link_target``.
+    """
+    return f"./{ad_files_dirname(det)}/"
+
 
 UNLIMITED_FRAMES = 500_000
 """Hard cap on ``cam.num_images`` (Eiger rejects larger values)."""
@@ -1274,8 +1281,19 @@ def restore_stage_sigs(snapshot):
 _AD_FILES_WARNED = set()
 
 
+def _read_path_template(det):
+    """Workstation mount path for the detector's image files, or None.
+
+    This is the value the image-files symlink must point at.  Sourced
+    from ``det.hdf1.read_path_template``.
+    """
+    return getattr(det.hdf1, "read_path_template", None) or getattr(
+        det.hdf1, "_read_path_template", None
+    )
+
+
 def _check_ad_files_symlink(det, master_dir):
-    """Warn if ``./ad_files`` is missing in ``master_dir``.
+    """Warn if the image-files symlink is missing in ``master_dir``.
 
     Once per ``(master_dir, target)``.  Never creates the link.
     Returns ``True`` if present, ``False`` if a warning was emitted.
@@ -1283,12 +1301,11 @@ def _check_ad_files_symlink(det, master_dir):
     import os
 
     master_dir = str(master_dir)
-    if os.path.lexists(os.path.join(master_dir, AD_FILES_DIRNAME)):
+    name = ad_files_dirname(det)
+    if os.path.lexists(os.path.join(master_dir, name)):
         return True
 
-    read_tmpl = getattr(det.hdf1, "read_path_template", None) or getattr(
-        det.hdf1, "_read_path_template", None
-    )
+    read_tmpl = _read_path_template(det)
     if read_tmpl:
         target = read_tmpl.rstrip("/") or "/"
     else:
@@ -1302,7 +1319,6 @@ def _check_ad_files_symlink(det, master_dir):
         return False
     _AD_FILES_WARNED.add(key)
 
-    name = AD_FILES_DIRNAME
     logger.warning(
         "\n"
         "The directory or symlink './%s' is missing in %s.\n"
@@ -1316,8 +1332,6 @@ def _check_ad_files_symlink(det, master_dir):
         "To fix, run this command from %s:\n"
         "\n"
         "    ln -s %s %s\n"
-        "\n"
-        "The flyscan plan does NOT create this link automatically.\n"
         "\n"
         "To verify:\n"
         "    ls -l %s       # should show '%s -> %s'\n"
@@ -1336,14 +1350,70 @@ def _check_ad_files_symlink(det, master_dir):
     return False
 
 
-def _external_link_target(det, ad_files_root=AD_FILES_ROOT):
+def _ensure_ad_files_symlink(det, master_dir):
+    """Create the image-files symlink in ``master_dir`` if absent.
+
+    The symlink (``{det.name}_files``) maps the relative external-link
+    root in the master to the workstation mount where the IOC's image
+    files are visible (``det.hdf1.read_path_template``).  Without it,
+    tools that read the master cannot reach the image data.
+
+    Creates the link when it is safe to do so.  Falls back to a
+    descriptive WARNING (via ``_check_ad_files_symlink``) when it is
+    not: the target mount is unknown or does not exist, or the link
+    cannot be created.  Never raises.
+
+    Returns ``True`` if the link is present (pre-existing or created),
+    ``False`` otherwise.
+    """
+    import os
+
+    master_dir = str(master_dir)
+    name = ad_files_dirname(det)
+    link_path = os.path.join(master_dir, name)
+
+    if os.path.lexists(link_path):
+        return True
+
+    target = _read_path_template(det)
+    if target:
+        target = target.rstrip("/") or "/"
+    if not target or not os.path.isdir(target):
+        # Unknown or non-existent mount: do not guess.  Warn instead.
+        return _check_ad_files_symlink(det, master_dir)
+
+    try:
+        os.symlink(target, link_path)
+    except OSError as exc:
+        logger.warning(
+            "flyscan: could not create image-files symlink %r -> %r:"
+            " %r.  Falling back to a manual-fix warning.",
+            link_path,
+            target,
+            exc,
+        )
+        return _check_ad_files_symlink(det, master_dir)
+
+    logger.info(
+        "flyscan: created image-files symlink %r -> %r so the master"
+        " file's external links resolve to the area-detector images.",
+        link_path,
+        target,
+    )
+    return True
+
+
+def _external_link_target(det, ad_files_root=None):
     """Relative external-link target: ``{ad_files_root}<suffix>``.
 
+    ``ad_files_root`` defaults to the per-detector ``./{det.name}_files/``.
     ``<suffix>`` is ``det.hdf1.full_file_name`` with
     ``hdf1.write_path_template`` stripped (the host-specific prefix).
     Falls back to the full absolute path with a WARNING if the
     template is missing or doesn't match.
     """
+    if ad_files_root is None:
+        ad_files_root = ad_files_root_for(det)
     ioc_file = det.hdf1.full_file_name.get(use_monitor=False)
     write_tmpl = getattr(det.hdf1, "write_path_template", None) or getattr(
         det.hdf1, "_write_path_template", None
@@ -2855,18 +2925,19 @@ def flyscan(
         import h5py
 
         yield from nxwriter.wait_writer_plan_stub()
-        # Three independent write steps follow.  Each is wrapped in
-        # its own try so one failure does not mask the others.
+        # Two independent write steps follow (external link, then
+        # flyscan_data).  Each is wrapped in its own try so one failure
+        # does not mask the other.
         external_addr = "/entry/data"
         external_file = _external_link_target(det)
         master_addr = "/entry/images"
         master_file = nxwriter.output_nexus_file  # AttributeError if not written
 
-        import os
+        from pathlib import Path
 
-        _check_ad_files_symlink(
-            det, master_dir=os.path.dirname(os.path.abspath(master_file))
-        )
+        # Create the image-files symlink before resolving the external
+        # link, so the link (and the later AD-file open) resolve.
+        _ensure_ad_files_symlink(det, master_dir=Path(master_file).absolute().parent)
 
         # Loop A: master file openable for append?
         if not _wait_for_openable(master_file, mode="a"):
