@@ -196,6 +196,12 @@ These are imported from the user's host-wide notes
 
 - Do **not** push or open PRs without an explicit request.  Commit
   freely when asked.
+- **Issue work happens on a feature branch, never directly on
+  `main`.**  Use an existing feature branch when one already covers
+  the work (a single branch may span several related issues), or
+  create one before the first commit.  The user may override in rare
+  cases, but that is not typical; when committing to `main` appears to
+  be requested, verify first rather than assume.
 - Issue and PR titles must be **brief** and written for the target
   audience (beamline staff and users), focusing on the observable
   problem or change rather than internal implementation detail.  Use a
