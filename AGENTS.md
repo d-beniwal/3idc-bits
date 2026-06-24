@@ -161,6 +161,17 @@ methods, or plan methods on the bundle itself.  Example:
 - D-series docstring rules are enabled (`D100`-`D107`).  Every public
   module, class, and function (including `__init__`) must have a
   docstring.
+- **Comments and docstrings describe the code as it is now**, for the
+  target audience (beamline staff and users who will maintain and
+  extend it).  Do **not** narrate history in the source: no "used to",
+  "formerly", "no longer", "the older X", "renamed from", changelog
+  notes, or migration commentary.  That history belongs in GitHub
+  issues, PRs, and commit messages, which are the repositories for it.
+  When you change behavior, rewrite the affected comments/docstrings to
+  describe the new state plainly and delete the obsolete narration
+  rather than appending to it.  Rare exceptions (a non-obvious gotcha a
+  future reader must know to avoid re-introducing a bug) should be
+  stated as a present-tense caution, not as a story.
 
 ## Documentation conventions
 
