@@ -196,6 +196,12 @@ These are imported from the user's host-wide notes
 
 - Do **not** push or open PRs without an explicit request.  Commit
   freely when asked.
+- Issue and PR titles must be **brief** and written for the target
+  audience (beamline staff and users), focusing on the observable
+  problem or change rather than internal implementation detail.  Use a
+  short prefix where it helps (`BUG:`, `FIX:`, `DOC:`, etc.).  Good:
+  `BUG: flyscan() master file missing /entry/flyscan_data/ group`.
+  Avoid long, mechanism-heavy titles that read like a commit body.
 - Working notes in `.nogit_*.md` (gitignored in most BCDA-APS repos;
   worth checking this repo's `.gitignore`).
 - `gh` is authenticated as `prjemian`; reading is fine, PR creation
