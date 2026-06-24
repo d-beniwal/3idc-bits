@@ -103,8 +103,8 @@ MAX_ACQUISITION_SECONDS = 300_000
 """Soft cap on ``num_images * acquire_period`` (~3.5 days).
 
 The Eiger refuses to arm when the implied total acquisition
-duration exceeds ~600_000 s (probed 2026-06-16).  Stay well under
-that.  See ``effective_num_images``.
+duration exceeds ~600_000 s.  Stay well under that.  See
+``effective_num_images``.
 """
 
 
@@ -143,7 +143,7 @@ if not logger.handlers and not logging.getLogger().handlers:
 # Module-level tunable timing constants.
 #
 # These are the wake-up ticks for plan-side loops that wait on a
-# status-object flag (Phase 3 refactor).  CA monitor callbacks update
+# status-object flag.  CA monitor callbacks update
 # the flags asynchronously on the pyepics dispatch thread; the plan
 # wakes up at these intervals to check the flag and decide whether to
 # proceed.
@@ -171,7 +171,7 @@ _CLEANUP_DRAIN_TICK = 0.05
 # At typical scan rates (10 Hz frames, 20 ms consumer tick), the
 # queue stays nearly empty.  This bound exists to detect a
 # producer/consumer mismatch — overflow is logged once as a WARNING
-# and the entry is dropped (per Phase 3 decision 3.3b).  Increase
+# and the entry is dropped.  Increase
 # here if higher-rate scans are ever attempted.
 _FRAME_QUEUE_SIZE = 64
 
@@ -242,21 +242,11 @@ def read_motor_field(motor, suffix, timeout=1.0):
     within ``timeout`` seconds or any other read error occurs.
 
     Uses ``epics.caget`` directly rather than constructing a throwaway
-    ``EpicsSignal``.  Rationale:
-
-    * ``caget`` runs on the calling thread's CA context and does no
-      asynchronous metadata fetching.  An earlier ``EpicsSignal``-based
-      implementation triggered a SIGSEGV in pyepics' ``util3`` dispatch
-      thread on ``gp:m1.VBAS``: the ``EpicsSignal`` was created, read,
-      then ``destroy()``ed, but pyepics had queued a deferred metadata
-      callback (``get_all_metadata_callback``) that fired *after* the
-      underlying CA channel had been torn down — at first a recoverable
-      ``RuntimeError: Expected CA context is unset`` (2026-06-04
-      12:46:38 session), then a segfault (2026-06-04 13:10 session).
-    * ``caget`` also sidesteps the oregistry-pollution concern (the
-      previous implementation needed a ``_suspended_auto_register``
-      context manager to keep the throwaway signal out of the global
-      registry).
+    ``EpicsSignal``.  ``caget`` runs on the calling thread's CA context
+    and does no asynchronous metadata fetching; a throwaway
+    ``EpicsSignal`` can segfault when pyepics fires a deferred metadata
+    callback after the signal's CA channel is torn down, and would also
+    need suppression to avoid polluting the global oregistry.
     """
     pv = motor.prefix + suffix
     try:
@@ -528,22 +518,19 @@ def configure_adsimdet(
     # 5. Capture sizing.
     #
     # In 'Capture' mode, num_capture is an *upper bound*: the plugin
-    # stops capturing when this count is reached, but the on-disk
-    # dataset is sized to whatever number of frames actually got
-    # captured (verified by experiment: num_capture=5 with only 3
-    # frames arriving produced a (3, H, W) dataset, not (5, H, W)).
+    # stops capturing when this count is reached, and the on-disk
+    # dataset is sized to the number of frames actually captured.
     #
     # CAUTION: num_capture cannot be made arbitrarily large.  The IOC's
     # NDFileHDF5 plugin computes byte counts as C int arithmetic during
     # dataset pre-allocation; values around 1e9 with Float64 1024x1024
     # frames overflow, producing a file whose num_captured counter
-    # advances but whose /entry/data/data dataset is never written
-    # (verified empirically).  num_capture <= ~1e6 is known safe for
-    # typical frame sizes.
+    # advances but whose /entry/data/data dataset is never written.
+    # Keep num_capture <= ~1e6 for typical frame sizes.
     #
-    # We choose num_capture sized for the expected count times 1.5
-    # plus 20, which absorbs (takeoff & landing) leading edges, post-stop
-    # tail frames, and timing jitter for any sensible scan size.
+    # num_capture is sized for the expected count times 1.5 plus 20,
+    # which absorbs takeoff/landing leading edges, post-stop tail
+    # frames, and timing jitter for any sensible scan size.
     expected_frames = int(capture_duration / acquire_period)
     if num_capture is None:
         num_capture = int(expected_frames * 1.5) + 20
@@ -571,8 +558,8 @@ def configure_adsimdet(
     det.cam.num_images.put(UNLIMITED_FRAMES)
 
     # 7. Arm the HDF plugin and *wait* for it to reach the 'Capturing'
-    #    state.  This was a race in earlier tests: cam frames arrived
-    #    before capture was ready, and were silently dropped.
+    #    state.  Without the wait, cam frames that arrive before capture
+    #    is ready are silently dropped.
     #
     # ``capture`` is an EpicsSignalWithRBV; ``set(1)`` runs the generic
     # Signal.set() path which puts and then polls Capture_RBV until it
@@ -636,9 +623,8 @@ def configure_adsimdet(
         #
         # num_queued_arrays is an RBV-only PV (no .set() to lean on);
         # use the _wait_for helper.  Timeout is a warning, not a
-        # raise, matching the original behavior.  int() cast in the
-        # predicate guards against pyepics returning the value as a
-        # string for certain record types.
+        # raise.  int() cast in the predicate guards against pyepics
+        # returning the value as a string for certain record types.
         try:
             _wait_for(
                 det.hdf1.num_queued_arrays,
@@ -659,9 +645,9 @@ def configure_adsimdet(
         # 12. Explicitly flush the file to disk.  WriteFile=1 forces
         #     the plugin to write out whatever it has captured.  This
         #     is required when stopping capture before num_capture is
-        #     reached: empirically, neither Capture=0 alone nor
-        #     auto_save=Yes is sufficient in that case (the file ends
-        #     up with the NeXus skeleton but no image dataset).
+        #     reached: neither Capture=0 alone nor auto_save=Yes flushes
+        #     in that case (the file ends up with the NeXus skeleton but
+        #     no image dataset).
         captured = det.hdf1.num_captured.get(use_monitor=False)
         if captured > 0:
             logger.info(
@@ -974,10 +960,7 @@ def validate_flyscan_inputs(
             f" .VELO unreadable or non-positive (got {v_velo!r})."
         )
 
-    # Effective ceiling: per user spec, .VELO is the cap (independent
-    # of .VMAX).  The TODO-formula MIN(VELO, MAX(VMAX, VELO)) reduces
-    # to VELO in all cases — both branches of MAX yield a value >= VELO,
-    # so MIN with VELO gives VELO.
+    # Effective ceiling: .VELO is the cap, independent of .VMAX.
     v_max = float(v_velo)
 
     # Effective floor: start with .VBAS (None/0 sentinel => no IOC
@@ -1091,17 +1074,15 @@ def build_flyscan_md(
     appear without the underscore in the metadata for readability.
 
     ``plan_name`` is recorded explicitly here (defaulting to
-    ``"flyscan"`` in the calling ``flyscan(...)`` plan).  We cannot
-    rely on bluesky's ``RunEngine`` start-doc auto-derivation
-    (``getattr(self._plan, "__name__", "")``) because the
+    ``"flyscan"`` in the calling ``flyscan(...)`` plan).  Bluesky's
+    ``RunEngine`` start-doc auto-derivation
+    (``getattr(self._plan, "__name__", "")``) cannot be used: the
     ``@bluesky.utils.plan`` decorator wraps the generator in a
-    ``Plan`` class instance with no ``__name__`` attribute, so the
-    auto-derived value is the empty string.  Empirically confirmed
-    on 2026-06-10 against bluesky's current ``Plan`` implementation
-    (``__slots__ = ("_iter", "_stack")`` — no ``__name__`` slot).
-    Wrapper plans should pass their own name via ``flyscan(...,
-    plan_name="my_wrapper_name", ...)`` so the run's provenance
-    reflects the wrapper, not the inner flyscan call.
+    ``Plan`` instance with no ``__name__`` attribute, so the
+    auto-derived value is the empty string.  Wrapper plans should
+    pass their own name via ``flyscan(..., plan_name="my_wrapper",
+    ...)`` so the run's provenance reflects the wrapper, not the
+    inner flyscan call.
 
     ``None``-substitution policy
     ----------------------------
@@ -1111,14 +1092,13 @@ def build_flyscan_md(
     ``apstools.callbacks.nexus_writer.NXWriter.write_metadata`` runs
     ``h5py.Group.create_dataset(k, data=v)`` on each item, and
     ``data=None`` raises ``TypeError: One of data, shape or dtype
-    must be specified`` (verified on the gp:m1 + adsimdet IOC at
-    11:05:25, 2026-06-10 — see ``flyscan_3idc_notes.md``).
+    must be specified``.
 
-    For each input that may be ``None``, we substitute the value the
+    For each input that may be ``None``, substitute the value the
     validator / plan effectively used in its place, and record a
     sibling boolean so the provenance (real value vs substituted
-    default) is recoverable from metadata.  Symmetric with the
-    existing ``motor_accl_was_default`` pattern:
+    default) is recoverable from metadata, matching the
+    ``motor_accl_was_default`` pattern:
 
     +------------------------------+------------------+--------------------------------+
     | metadata key                 | None substitute  | companion boolean              |
@@ -1181,10 +1161,8 @@ def build_flyscan_md(
       per-frame motor-position interpolation at the three
       meaningful per-period phases (start_acquire, end_acquire,
       end_period).  Defaults to ``-t_acquire`` in the calling
-      ``flyscan(...)`` plan (the Phase 0 verdict for the
-      gp:m1 + adsimdet IOC; see ``flyscan_3idc_notes.md``).  Pass
-      a per-call override if your IOC's HDF plugin timestamps
-      counter events at a different phase.
+      ``flyscan(...)`` plan.  Pass a per-call override if your IOC's
+      HDF plugin timestamps counter events at a different phase.
     """  # noqa E501
     # Substitute h5py-serialisable defaults for any None values, and
     # record companion booleans preserving the provenance.  See the
@@ -1254,10 +1232,8 @@ def build_flyscan_md(
         # the corresponding frame's start-of-acquire moment.  Used by
         # flyscan_3idc_analysis.pair_frames_to_positions to compute
         # per-frame start_acquire / end_acquire / end_period
-        # timestamps.  See flyscan_3idc_notes.md "Phase 0 verdict"
-        # for how the default (-t_acquire on gp:m1 + adsimdet) was
-        # determined.  Per-call overridable via flyscan(...,
-        # hdf_t_phase_offset=...).
+        # timestamps.  Default -t_acquire; per-call overridable via
+        # flyscan(..., hdf_t_phase_offset=...).
         "hdf_t_phase_offset": hdf_t_phase_offset,
         # Names of any extra readables passed to flyscan(detectors=).
         "detector_names": list(detector_names),
@@ -1536,8 +1512,8 @@ def _expected_frame_count(
 
 
 # Cam state values (DetectorState_RBV enum) that indicate the cam
-# failed to arm or is otherwise unusable.  Empirically verified on
-# the Eiger 2026-06-16: failed arm transitions to 'Error' within ~2 ms.
+# failed to arm or is otherwise unusable.  On the Eiger a failed arm
+# transitions to 'Error' within ~2 ms.
 _CAM_ERROR_STATES = {"Error", "Aborted", "Aborting", "Disconnected"}
 
 
@@ -1600,9 +1576,8 @@ def motor_is_moving(motor):
     """True iff the motor is currently moving, checked via DMOV (no cache).
 
     Reads ``motor_done_move`` (the motor record's ``.DMOV`` field) with
-    ``use_monitor=False`` to bypass the pyepics monitor cache; this
-    matches the rest of this module's "bypass cache for timing-critical
-    reads" discipline (see strategy-doc Phase 0.1 for background).
+    ``use_monitor=False`` to bypass the pyepics monitor cache, matching
+    this module's "bypass cache for timing-critical reads" discipline.
 
     Prefer this function over ``motor.moving`` (the EpicsMotor property),
     which depending on ophyd version may read ``MOVN`` rather than
@@ -1611,8 +1586,7 @@ def motor_is_moving(motor):
     ``DMOV`` only goes to 1 when both phases are complete.
 
     Used by ``_cleanup`` to decide whether to issue ``bps.stop(flymotor)``
-    (skipped if the motor is already idle, per Phase 2 decision 2.5 /
-    Phase 3 decision 3.12).
+    (skipped if the motor is already idle).
     """
     return motor.motor_done_move.get(use_monitor=False, as_string=False) != 1
 
@@ -1828,7 +1802,7 @@ def wait_for_acquire_drained(det, poll=0.001, timeout=10.0):
     underlying status updates happen on the CA monitor thread; ``poll``
     only controls how soon the plan notices.  A future-proofing
     alternative would be ``bps.wait_for([asyncio_future])`` (would tie
-    the plan to the RunEngine's asyncio loop; see strategy doc Tier 4).
+    the plan to the RunEngine's asyncio loop).
     """
     has_busy = _has_component(det.cam, "acquire_busy")
     has_hdf_queue = _has_component(det, "hdf1") and _has_component(
@@ -1863,10 +1837,9 @@ def wait_for_acquire_drained(det, poll=0.001, timeout=10.0):
             )
         )
     if has_hdf_queue:
-        # HDF-drain predicate preserves the original race-window
-        # protection: queue empty AND all slots free (i.e. no frame
-        # is currently being written).  The two corroboration reads
-        # use use_monitor=False so the predicate sees consistent
+        # HDF-drain predicate: queue empty AND all slots free (i.e. no
+        # frame is currently being written).  The two corroboration
+        # reads use use_monitor=False so the predicate sees consistent
         # post-update values rather than a stale cache.
         hdf = det.hdf1
         sub_statuses.append(
@@ -1936,7 +1909,7 @@ def monitor_loop(
 ):
     """Plan stub: emit one primary-stream event per HDF frame written.
 
-    Producer/consumer design (Phase 3.C refactor):
+    Producer/consumer design:
 
     * **Producer:** a CA monitor callback on ``det.hdf1.num_captured``
       pushes ``(timestamp, new_value)`` onto a small bounded
@@ -1948,10 +1921,10 @@ def monitor_loop(
       thread; ``yield from bps.sleep(tick)`` keeps the RunEngine in
       control of pause/abort.
 
-    Per Phase 0.2 / Phase 0e: the primary stream is a progress
-    indicator.  Pairing of detector frames to flymotor positions
-    happens downstream via the IOC-timestamped monitor streams set
-    up by ``@bpp.monitor_during_decorator``; the per-frame
+    The primary stream is a progress indicator.  Pairing of detector
+    frames to flymotor positions happens downstream via the
+    IOC-timestamped monitor streams set up by
+    ``@bpp.monitor_during_decorator``; the per-frame
     ``bps.read(det)`` + ``bps.read(flymotor)`` here is a snapshot,
     not the system of record, and uses the cached monitor values
     (no extra CA traffic).
@@ -1978,12 +1951,10 @@ def monitor_loop(
     pass a ``motor_stopped_flag`` (see below) to discriminate
     "stopped on purpose" from "stopped because something else broke."
 
-    This check happens on each consumer tick (per Phase 3 decision
-    3.6 — overshoot is dominated by the motor record's ~10 Hz
-    update rate, not by the tick).
+    This check happens on each consumer tick; overshoot is dominated
+    by the motor record's ~10 Hz update rate, not by the tick.
 
-    Exit: ``exit_when.done``.  Per Phase 3 decisions 3.8 / 3.B, the
-    caller constructs ``exit_when`` as
+    Exit: ``exit_when.done``.  The caller constructs ``exit_when`` as
     ``AndStatus(cam_stopped_status, drain_status)`` so the loop
     exits only when the cam has been stopped AND every in-flight
     frame has been flushed by the HDF plugin.
@@ -1994,9 +1965,9 @@ def monitor_loop(
     completes the status as failed if no frame arrives in time; the
     consumer checks ``watchdog.done and not watchdog.success`` per
     tick and raises ``RuntimeError`` annotated with the HDF
-    plugin's ``WriteStatus`` and ``WriteMessage``.  Per Phase 3
-    decision 3.11, the raise lets the RunEngine send STOP to all
-    in-motion movables (including ``flymotor``), which is exactly
+    plugin's ``WriteStatus`` and ``WriteMessage``.  The raise lets
+    the RunEngine send STOP to all in-motion movables (including
+    ``flymotor``), which is exactly
     what we want when something is wrong with the IOC/cam/HDF
     chain.
 
@@ -2041,7 +2012,7 @@ def monitor_loop(
 
         Pushes ``(timestamp, value)`` onto ``frame_queue``.  Drops
         the entry and logs a single WARNING if the queue is full
-        (per Phase 3 decision 3.3b — never block the CA thread).
+        (never block the CA thread).
         """
         try:
             frame_queue.put_nowait((timestamp, int(value)))
@@ -2057,7 +2028,7 @@ def monitor_loop(
                     _FRAME_QUEUE_SIZE,
                 )
 
-    # --- Inner helpers (per Phase 3 decision 3.1: named for clarity)
+    # --- Inner helpers (named for clarity)
 
     def _emit_pending_frames(last_captured, *, acquire_stopped):
         """Drain the queue and emit one primary event per new frame.
@@ -2138,8 +2109,7 @@ def monitor_loop(
         """
         if acquire_stopped:
             return acquire_stopped
-        # Bypass cache for the position read — pairing timing matters
-        # here (Phase 0.1 decision).
+        # Bypass cache for the position read — pairing timing matters.
         if flymotor.user_readback.get(use_monitor=False) >= p_end:
             logger.info(
                 "monitor_loop: motor crossed p_end (%g); stopping acquire"
@@ -2164,16 +2134,15 @@ def monitor_loop(
         Returns nothing; raises RuntimeError on watchdog trip.
         Watchdog timeout is signalled by ophyd's StatusBase as
         ``done=True, success=False`` after the timeout elapses
-        without the predicate becoming true (per Phase 3 decision
-        3.10).
+        without the predicate becoming true.
         """
         if watchdog is None:
             return
         if not (watchdog.done and not watchdog.success):
             return
         # Watchdog has tripped.  Harvest diagnostics from the HDF
-        # plugin to annotate the exception (per Phase 3 decision
-        # 3.11 — keep raise behavior; RE will STOP movables).
+        # plugin to annotate the exception, then raise so the
+        # RunEngine STOPs movables.
         write_status = _safe_get(det.hdf1, "write_status", as_string=True)
         write_message = _safe_get(det.hdf1, "write_message", as_string=True)
         full_file_name = _safe_get(det.hdf1, "full_file_name", as_string=True)
@@ -2271,16 +2240,13 @@ def flyscan(
     # rely on bluesky's RunEngine auto-derivation
     # (getattr(plan, "__name__", "")) because the @bluesky_plan
     # decorator wraps the generator in a Plan() class instance that
-    # has no __name__ attribute — that path yields plan_name=""
-    # (empirically confirmed 2026-06-10; see flyscan_3idc_notes.md).
+    # has no __name__ attribute — that path yields plan_name="".
     plan_name: str = "flyscan",
     # Seconds to add to each hdf1.array_counter monitor-stream
     # timestamp to obtain the corresponding frame's
     # start-of-acquire moment.  None (the default) means "use
-    # -t_acquire" -- the Phase 0 verdict for the gp:m1 +
-    # adsimdet IOC: hdf_t timestamps each event at ~end_acquire,
+    # -t_acquire": hdf_t timestamps each event at ~end_acquire,
     # so start_acquire = hdf_t - t_acquire.  See
-    # flyscan_3idc_notes.md for the empirical derivation and
     # flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic
     # for how to determine the right value on a different IOC.
     # Per-call override for IOCs/detectors with different HDF
@@ -2288,23 +2254,22 @@ def flyscan(
     hdf_t_phase_offset: float = None,
     # TODO: trigger mode?
     # ------------------------------- internal parameters
-    # Wake-up tick for monitor_loop's consumer (Phase 3).  CA
+    # Wake-up tick for monitor_loop's consumer.  CA
     # monitor callbacks update status flags asynchronously; the
     # plan wakes up every _consumer_tick seconds to check them.
     # Default defined as a module-level constant so all related
     # timing knobs live in one place; can be overridden per-run.
     _consumer_tick: float = _CONSUMER_TICK_DEFAULT,
     # Override the HDF plugin's blocking_callbacks setting.
-    # Default (False) leaves the safe behaviour in place: HDF runs
-    # with blocking_callbacks="Yes" so the cam back-throttles to
-    # HDF's write rate and no frames are dropped.  Setting True
-    # forces blocking_callbacks="No" on the HDF plugin, restoring
-    # the historical (data-losing) behaviour.  The only legitimate
-    # use is to *demonstrate* the FlyscanDataLossWarning code path
-    # on hardware where blocking mode prevents drops — set True,
-    # crank up exposures_per_egu past what the HDF can sustain,
-    # and watch the post-scan warning fire.  Not for production
-    # data collection.
+    # Default (False) keeps the safe mode: HDF runs with
+    # blocking_callbacks="Yes" so the cam back-throttles to HDF's
+    # write rate and no frames are dropped.  Setting True forces
+    # blocking_callbacks="No", which lets the HDF plugin drop frames.
+    # The only legitimate use is to *demonstrate* the
+    # FlyscanDataLossWarning code path on hardware where blocking mode
+    # prevents drops — set True, crank up exposures_per_egu past what
+    # the HDF can sustain, and watch the post-scan warning fire.  Not
+    # for production data collection.
     _force_hdf_nonblocking: bool = False,
     # ------------------------------- user-supplied metadata: always last
     md: dict = None,
@@ -2598,8 +2563,7 @@ def flyscan(
         compute the three per-frame positions (start_acquire,
         end_acquire, end_period) recorded in the analysis output
         and (eventually) the NeXus master file.  ``None`` (default)
-        means "use ``-t_acquire``" — the Phase 0 empirical verdict
-        for the gp:m1 + adsimdet IOC (``hdf_t`` arrives at
+        means "use ``-t_acquire``" (``hdf_t`` arrives at
         ~``end_acquire``, so ``start_acquire = hdf_t - t_acquire``).
         See
         ``flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic``
@@ -2651,8 +2615,7 @@ def flyscan(
     # t_acquire defaults to t_period (continuous exposure).
     if t_acquire is None:
         t_acquire = t_period
-    # hdf_t_phase_offset defaults to -t_acquire, the Phase 0
-    # verdict for the gp:m1 + adsimdet IOC: hdf_t arrives at
+    # hdf_t_phase_offset defaults to -t_acquire: hdf_t arrives at
     # ~end_acquire, so start_acquire = hdf_t - t_acquire.
     if hdf_t_phase_offset is None:
         hdf_t_phase_offset = -t_acquire
@@ -2740,11 +2703,10 @@ def flyscan(
     scan_velocity = geometry.scan_velocity
 
     # IOC HDF plugin pre-allocation overflows somewhere between 1e6
-    # and 1e9 for Float64 1024x1024 frames (verified empirically;
-    # likely a C int byte-count overflow in NDFileHDF5).  num_capture
-    # = num_frames * 1.5 + 20 is comfortable for any sensible scan
-    # size while absorbing takeoff & landing leading frames, post-stop
-    # tail frames, and timing jitter.
+    # and 1e9 for Float64 1024x1024 frames (likely a C int byte-count
+    # overflow in NDFileHDF5).  num_capture = num_frames * 1.5 + 20 is
+    # comfortable for any sensible scan size while absorbing takeoff &
+    # landing leading frames, post-stop tail frames, and timing jitter.
     #
     # NOTE: the raw HDF5 file therefore holds MORE frames than
     # ``num_frames`` (pre-roll + post-stop tail).  This is explained in
@@ -2839,8 +2801,7 @@ def flyscan(
     # makes bps.read(det) include them and live displays plot them.
     # We restore in _cleanup so other plans against this detector see
     # whatever kind it was configured with by default (typically
-    # Kind.config or Kind.omitted for these counters).  See Phase 3
-    # decision 3.5a/3.5b in the strategy doc.
+    # Kind.config or Kind.omitted for these counters).
     saved_kinds = snapshot_kinds(
         det.cam.array_counter,
         det.hdf1.array_counter,
@@ -3102,20 +3063,15 @@ def flyscan(
         # even in continuous image_mode -- if a user had pre-set
         # cam.num_images to a small value (e.g. 50) via MEDM, the cam
         # would stop after that many frames regardless of motor
-        # position.  Observed on 2026-06-15: cam pre-set to 50 capped
-        # acquisition at 50 frames.  Setting num_images here via
-        # stage_sigs guarantees boundary detection is the only stop
-        # condition; the user's pre-scan value is snapshotted by the
-        # earlier snapshot_stage_sigs(det, det.cam, ...) call and
-        # restored on unstage by restore_stage_sigs.
+        # position (a cam pre-set to 50 caps acquisition at 50 frames).
+        # Setting num_images here via stage_sigs guarantees boundary
+        # detection is the only stop condition; the user's pre-scan
+        # value is snapshotted by the earlier snapshot_stage_sigs(det,
+        # det.cam, ...) call and restored on unstage by
+        # restore_stage_sigs.
         det.cam.stage_sigs["num_images"] = effective_num_images(t_period)
         det.hdf1.stage_sigs["num_capture"] = hdf_num_capture
-        # AD callback-chain throttling (revised 2026-06-08 after a
-        # flyscan reported only 59 of an expected 101 frames written
-        # to HDF, with cam.array_counter showing the cam itself ran
-        # at the requested 10 Hz — i.e. the cam produced 117 frames
-        # but HDF wrote only 59, and hdf1.dropped_arrays climbed by
-        # ~58 to confirm).  Root cause: under
+        # AD callback-chain throttling.  Under
         # ``blocking_callbacks="No"`` the cam doesn't wait for HDF to
         # consume the previous frame before producing the next; HDF's
         # input queue overflows when the file-write throughput is
@@ -3207,11 +3163,10 @@ def flyscan(
     )
     @bpp.run_decorator(md=_md)
     def takeoff_and_monitor():
-        # Takeoff ordering (revised 2026-06-08 after empirical
-        # observation that the cam delivered its first frame several
-        # seconds after Acquire=1, by which time the motor was already
-        # past p_start, costing the user a chunk of their requested
-        # frame budget):
+        # Takeoff ordering.  The cam can deliver its first frame
+        # several seconds after Acquire=1; launching the motor before
+        # then would let it move past p_start, costing the user a
+        # chunk of their requested frame budget.  So:
         #
         #   1. Start the cam acquiring (Acquire=1).
         #   2. Wait for the HDF plugin to receive its first frame
@@ -3227,13 +3182,12 @@ def flyscan(
         #
         # group="scan" registers the MoveStatus with the RunEngine so
         # the bps.wait(group="scan") below absorbs any post-scan
-        # motor settling after monitor_loop returns.  See Phase 3
-        # decisions 2.4/3.8 in the strategy doc.
+        # motor settling after monitor_loop returns.
         # Diagnostic: log what the IOC actually has for cam timings
         # right before we start.  Helps catch staging defects (e.g.
         # acquire_period got overridden, or acquire_time > t_period
-        # silently capped by the IOC) without an empirical "why is
-        # my frame rate wrong" investigation.
+        # silently capped by the IOC) without a "why is my frame rate
+        # wrong" investigation.
         actual_acquire_time = _safe_get(det.cam, "acquire_time", use_monitor=False)
         actual_acquire_period = _safe_get(det.cam, "acquire_period", use_monitor=False)
         actual_image_mode = _safe_get(
@@ -3267,7 +3221,7 @@ def flyscan(
         # Without this check the run would otherwise time out 5 s later
         # in the first-frame wait below, with a misleading apstools
         # "Path '/' does not exist on IOC" error from the unwinding
-        # path.  See sessions/2026-06-16/README.md for the probe data.
+        # path.
         yield from _check_cam_armed(det)
         # From this point on, _cleanup should treat the HDF plugin as
         # active (drain, flush, verify).  If we never get here,
@@ -3345,19 +3299,15 @@ def flyscan(
         # rather than "cam never started".
         no_frames_timeout = max(scan_active_duration + 2 * t_period, 5.0)
 
-        # Status-based exit condition for monitor_loop (Phase 3
-        # decisions 3.8 + 3.9, revised by 3.B.4 after empirical
-        # gates caught two false-early-exit defects, and revised
-        # again 2026-06-08 after a flyscan hang where the loop
-        # never exited because cam.acquire (== Acquire_RBV) stayed
-        # at 1 for >60s after we wrote Acquire=0 — the simulator
-        # IOC apparently finishes its current burst before the
-        # RBV drops.  Replaced with cam.acquire_busy, which the
-        # IOC drops to 0 promptly when wait_for_plugins=Yes
-        # (which we set via stage_sigs); same signal
-        # wait_for_acquire_drained uses successfully in cleanup.
-        # Falls back to cam.acquire only on devices that don't
-        # expose acquire_busy.
+        # Status-based exit condition for monitor_loop.  Uses
+        # cam.acquire_busy rather than cam.acquire: cam.acquire
+        # (== Acquire_RBV) can stay at 1 for many seconds after
+        # Acquire=0 is written (the IOC finishes its current burst
+        # before the RBV drops), which would hang the loop.
+        # cam.acquire_busy drops to 0 promptly when
+        # wait_for_plugins=Yes (set via stage_sigs); the same signal
+        # wait_for_acquire_drained uses in cleanup.  Falls back to
+        # cam.acquire only on devices that don't expose acquire_busy.
         # This is an AndStatus of two sub-statuses:
         #   1. cam_stopped_status: cam.acquire_busy == 0 (preferred)
         #      or cam.acquire == 0 (fallback).  The busy signal
@@ -3422,15 +3372,14 @@ def flyscan(
         )
         hdf_drain_status = AndStatus(cam_stopped_status, drain_status)
 
-        # No-frames watchdog (Phase 3 decision 3.10): a status that
-        # times out if num_captured doesn't reach > 0 within
-        # no_frames_timeout seconds.  ophyd's StatusBase timeout
-        # mechanism sets the status to done-with-exception
-        # (StatusTimeoutError) on its own thread; the consumer in
-        # monitor_loop checks `watchdog_status.done and not
-        # watchdog_status.success` per tick to detect the trip and
-        # raise RuntimeError (per 3.11 — RE then sends STOP to all
-        # in-motion movables, including flymotor).
+        # No-frames watchdog: a status that times out if num_captured
+        # doesn't reach > 0 within no_frames_timeout seconds.  ophyd's
+        # StatusBase timeout mechanism sets the status to
+        # done-with-exception (StatusTimeoutError) on its own thread;
+        # the consumer in monitor_loop checks `watchdog_status.done and
+        # not watchdog_status.success` per tick to detect the trip and
+        # raise RuntimeError (the RE then sends STOP to all in-motion
+        # movables, including flymotor).
         watchdog_status = SubscriptionStatus(
             det.hdf1.num_captured,
             lambda *, value, **_: int(value) > 0,
@@ -3515,7 +3464,7 @@ def flyscan(
         #   4. Drain HDF queue (flush in-flight frames to plugin buffer)
         #   5. write_file=1 (force HDF5 file to disk; required because
         #      auto_save=Yes does not flush when capture is stopped
-        #      early, as we do here — verified empirically)
+        #      early, as we do here)
         #   6. Verify full_file_name (the "tell" that the file landed)
         #   7. Restore overridden signals
         #   8. Restore stage_sigs snapshots
@@ -3566,17 +3515,13 @@ def flyscan(
 
             # Verify the file landed on disk.  We rely on auto_save=Yes
             # (set in the override list) to flush the HDF5 file when
-            # capture stops.  Verified empirically: from a bluesky plan
-            # with auto_save=Yes, Capture=0 causes the IOC to write the
-            # file without our needing to set WriteFile=1.
-            #
-            # (Manual GUI use with auto_save=No is different: there,
-            # WriteFile=1 must be set explicitly after Capture=0.  An
-            # earlier version of this code issued WriteFile=1 here as
-            # well, but it ran *after* the auto_save had already
-            # written the file, so the IOC rejected it with status=3.
-            # The file was fine; the error was spurious; the code was
-            # redundant.)
+            # capture stops: from a bluesky plan with auto_save=Yes,
+            # Capture=0 causes the IOC to write the file without our
+            # needing to set WriteFile=1.  (Do NOT add WriteFile=1 here:
+            # with auto_save=Yes it runs after the file is already
+            # written and the IOC rejects it with status=3 — a spurious
+            # error on an otherwise-fine file.  WriteFile=1 is only
+            # needed for manual GUI use with auto_save=No.)
             #
             # FullFileName_RBV is populated by the IOC after a
             # successful write.  An empty value here is the "tell"

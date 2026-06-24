@@ -40,18 +40,14 @@ docstring for the procedure.
 Design notes
 ------------
 
-- IOC timestamps are the system of record for pairing (per the
-  ``flyscan_3idc`` strategy doc, Phase 0.2 / Phase 0e).  The
+- IOC timestamps are the system of record for pairing.  The
   primary-stream snapshots from the plan are a progress indicator;
   this module's output is the high-fidelity pairing.
-- Empirically (verified during the 2026-06-08 commissioning
-  session against ``adsimdet`` + ``gp:m1``):
-  - the m1 monitor stream's record-order is interleaved across
-    multiple CA dispatcher segments; sorting by timestamp yields
-    a strictly increasing position trace at constant velocity in
-    the in-scan window.
-  - the HDF array_counter monitor stream's record-order is also
-    interleaved, but sorting by timestamp yields strictly
+- Monitor-stream record order is interleaved across CA dispatcher
+  segments, so sort by timestamp:
+  - the motor monitor stream then yields a strictly increasing
+    position trace at constant velocity in the in-scan window.
+  - the HDF array_counter monitor stream then yields strictly
     monotonic counter values (0, 1, 2, ..., contiguous).
 - The function uses linear interpolation of motor position vs
   motor IOC timestamp.  Linear is exact for a motor at constant
@@ -126,8 +122,7 @@ def _interpolate_positions(
         OVERLAPS the time window during which the motor was inside
         ``[p_start, p_end]``.  That window is bracketed by the first
         and last motor-stream samples whose position lies in
-        ``[p_start, p_end]``.  This widening (over the older
-        "position_start_acquire inside [p_start, p_end]" rule) admits
+        ``[p_start, p_end]``.  The time-overlap rule admits
         leading-edge and trailing-edge frames whose exposure crossed
         a boundary mid-way, as well as frames that fell on the
         wrong side of the boundary only due to motor-stream
@@ -144,9 +139,8 @@ def _interpolate_positions(
         (``hdf_t`` arrives at or after the frame's cam-end-of-
         exposure event; ``start_acquire`` is one t_acquire earlier).
         See ``hdf_timestamp_semantic_diagnostic`` to determine the
-        right value empirically; ``flyscan_3idc.build_flyscan_md``
-        defaults this to ``-t_acquire`` (the value Phase 0 derived
-        for the gp:m1 + adsimdet IOC).
+        right value for an IOC; ``flyscan_3idc.build_flyscan_md``
+        defaults this to ``-t_acquire``.
 
     Returns
     -------
@@ -274,9 +268,9 @@ def _interpolate_positions(
     # A frame is "in scan" if the time interval over which it was
     # exposing/holding ([start_acquire.t, end_period.t]) OVERLAPS the
     # time window during which the motor was inside [p_start, p_end].
-    # This is a deliberate widening over the older
-    # "position_start_acquire inside [p_start, p_end]" rule, which
-    # over-rejected three classes of frame:
+    # The time-overlap rule (rather than testing a single position
+    # against [p_start, p_end]) admits three classes of frame that
+    # carry valid in-range data:
     #
     #   1. Leading-edge: exposure started just before p_start but
     #      crossed p_start before end_acquire.  The frame DOES carry
@@ -297,14 +291,12 @@ def _interpolate_positions(
     #
     # Frames that never overlapped the window at all (taxi-in / coast-
     # out frames whose entire [start_acquire, end_period] falls before
-    # the first in-range motor sample or after the last) are still
-    # dropped, which is the correct behaviour for the original taxi /
-    # coast rejection use case.
+    # the first in-range motor sample or after the last) are dropped:
+    # they carry no in-range data.
     in_range_pos = (m_p >= p_start) & (m_p <= p_end)
     if not in_range_pos.any():
         # The motor never entered the scan range in this run; reject
-        # every frame.  This branch was implicitly handled before by
-        # the strict-position check; preserved here for symmetry.
+        # every frame.
         in_scan = np.zeros_like(ts_start, dtype=bool)
         motor_t_in_range_start = None
         motor_t_in_range_end = None
