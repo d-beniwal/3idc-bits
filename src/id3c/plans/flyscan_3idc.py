@@ -156,24 +156,32 @@ if not logger.handlers and not logging.getLogger().handlers:
 # Adjust here rather than at call sites — keeps related knobs together
 # and discoverable.
 
-# Default wake-up tick for monitor_loop's consumer (also the default
-# for the flyscan(_consumer_tick=...) plan kwarg).  20 ms = 50 Hz.
 _CONSUMER_TICK_DEFAULT = 0.02
+"""Default wake-up tick for monitor_loop's consumer.
 
-# Wake-up tick for wait_for_acquire_drained in the cleanup path.
-# Cleanup latency does not matter for live progress, so coarser is
-# fine; 50 ms = 20 Hz.
+Also the default for the ``flyscan(_consumer_tick=...)`` plan kwarg.
+20 ms = 50 Hz.
+"""
+
 _CLEANUP_DRAIN_TICK = 0.05
+"""Wake-up tick for wait_for_acquire_drained in the cleanup path.
 
-# Bounded size for monitor_loop's per-frame producer/consumer queue.
-# The producer (a CA monitor callback on hdf1.num_captured) pushes
-# (timestamp, value) tuples; the consumer drains in monitor_loop.
-# At typical scan rates (10 Hz frames, 20 ms consumer tick), the
-# queue stays nearly empty.  This bound exists to detect a
-# producer/consumer mismatch — overflow is logged once as a WARNING
-# and the entry is dropped.  Increase
-# here if higher-rate scans are ever attempted.
+Cleanup latency does not matter for live progress, so coarser is
+fine; 50 ms = 20 Hz.
+"""
+
 _FRAME_QUEUE_SIZE = 64
+"""Bounded size for monitor_loop's per-frame producer/consumer queue.
+
+The producer (a CA monitor callback on hdf1.num_captured) pushes
+(timestamp, value) tuples; the consumer drains in monitor_loop.  At
+typical scan rates (10 Hz frames, 20 ms consumer tick), the queue
+stays nearly empty.
+
+This bound exists to detect a producer/consumer mismatch — overflow
+is logged once as a WARNING and the entry is dropped.  Increase here
+for higher-rate scans.
+"""
 
 
 # Public API of this module.  Other symbols (validators,
@@ -243,10 +251,12 @@ def read_motor_field(motor, suffix, timeout=1.0):
 
     Uses ``epics.caget`` directly rather than constructing a throwaway
     ``EpicsSignal``.  ``caget`` runs on the calling thread's CA context
-    and does no asynchronous metadata fetching; a throwaway
-    ``EpicsSignal`` can segfault when pyepics fires a deferred metadata
-    callback after the signal's CA channel is torn down, and would also
-    need suppression to avoid polluting the global oregistry.
+    and does no asynchronous metadata fetching.
+
+    A throwaway ``EpicsSignal`` is avoided because it can segfault when
+    pyepics fires a deferred metadata callback after the signal's CA
+    channel is torn down, and it would also need suppression to avoid
+    polluting the global oregistry.
     """
     pv = motor.prefix + suffix
     try:
@@ -723,10 +733,12 @@ def configure_adsimdet(
     return result
 
 
-# Fallback acceleration (seconds) used when ``.ACCL`` cannot be read.
-# Deliberately generous; over-allocating the taxi region only costs a
-# bit of extra travel before the first useful frame.
 _ACCL_FALLBACK_SECONDS = 0.25
+"""Fallback acceleration (seconds) used when ``.ACCL`` cannot be read.
+
+Deliberately generous; over-allocating the taxi region only costs a
+bit of extra travel before the first useful frame.
+"""
 
 
 class FlyscanDataLossWarning(UserWarning):
@@ -1260,8 +1272,8 @@ def restore_stage_sigs(snapshot):
         dev.stage_sigs.update(saved)
 
 
-# Once-per-(master_dir, target) dedup for _check_ad_files_symlink.
 _AD_FILES_WARNED = set()
+"""Once-per-(master_dir, target) dedup set for _check_ad_files_symlink."""
 
 
 def _read_path_template(det):
@@ -1511,10 +1523,11 @@ def _expected_frame_count(
     return None
 
 
-# Cam state values (DetectorState_RBV enum) that indicate the cam
-# failed to arm or is otherwise unusable.  On the Eiger a failed arm
-# transitions to 'Error' within ~2 ms.
 _CAM_ERROR_STATES = {"Error", "Aborted", "Aborting", "Disconnected"}
+"""Cam DetectorState_RBV values meaning the cam failed to arm / is unusable.
+
+On the Eiger a failed arm transitions to 'Error' within ~2 ms.
+"""
 
 
 def _check_cam_armed(det, poll_s=0.05, max_wait_s=0.5):
@@ -2215,8 +2228,6 @@ def monitor_loop(
 
 @bluesky_plan
 def flyscan(
-    # Extra readables, reported each frame.  Self-updating only:
-    # the plan does NOT call .trigger() on these.
     detectors: list = None,
     det_name: str = "adsimdet",
     flymotor_name: str = "m1",
@@ -2224,68 +2235,35 @@ def flyscan(
     p_end: float = 5,
     exposures_per_egu: float = 2.0,
     t_period: float = 0.1,
-    t_acquire: float = None,  # defaults to t_period when None
-    taxi_allowance: float = 0.5,  # motor EGU
+    t_acquire: float = None,
+    taxi_allowance: float = 0.5,
     compression: str = "zlib",
     ad_file_name: str = "flyscan",
     ad_file_path: str = "/tmp/flyscan",
-    # Effective scan-velocity floor is max(.VBAS, velocity_minimum);
-    # leaving this at None defers to .VBAS alone.  See
-    # validate_flyscan_inputs for the bracket policy.
     velocity_minimum: float = None,
-    # plan_name appears in the run's start document and in the NeXus
-    # master file.  Wrapper plans should pass their own name here
-    # (e.g. plan_name="my_3idc_scan") so the run's provenance
-    # reflects the wrapper, not the inner flyscan() call.  We can't
-    # rely on bluesky's RunEngine auto-derivation
-    # (getattr(plan, "__name__", "")) because the @bluesky_plan
-    # decorator wraps the generator in a Plan() class instance that
-    # has no __name__ attribute — that path yields plan_name="".
     plan_name: str = "flyscan",
-    # Seconds to add to each hdf1.array_counter monitor-stream
-    # timestamp to obtain the corresponding frame's
-    # start-of-acquire moment.  None (the default) means "use
-    # -t_acquire": hdf_t timestamps each event at ~end_acquire,
-    # so start_acquire = hdf_t - t_acquire.  See
-    # flyscan_3idc_analysis.hdf_timestamp_semantic_diagnostic
-    # for how to determine the right value on a different IOC.
-    # Per-call override for IOCs/detectors with different HDF
-    # plugin timestamp semantics.
     hdf_t_phase_offset: float = None,
-    # TODO: trigger mode?
-    # ------------------------------- internal parameters
-    # Wake-up tick for monitor_loop's consumer.  CA
-    # monitor callbacks update status flags asynchronously; the
-    # plan wakes up every _consumer_tick seconds to check them.
-    # Default defined as a module-level constant so all related
-    # timing knobs live in one place; can be overridden per-run.
+    # Internal parameters (underscore-prefixed); see Parameters.
     _consumer_tick: float = _CONSUMER_TICK_DEFAULT,
-    # Override the HDF plugin's blocking_callbacks setting.
-    # Default (False) keeps the safe mode: HDF runs with
-    # blocking_callbacks="Yes" so the cam back-throttles to HDF's
-    # write rate and no frames are dropped.  Setting True forces
-    # blocking_callbacks="No", which lets the HDF plugin drop frames.
-    # The only legitimate use is to *demonstrate* the
-    # FlyscanDataLossWarning code path on hardware where blocking mode
-    # prevents drops — set True, crank up exposures_per_egu past what
-    # the HDF can sustain, and watch the post-scan warning fire.  Not
-    # for production data collection.
     _force_hdf_nonblocking: bool = False,
-    # ------------------------------- user-supplied metadata: always last
+    # User-supplied metadata: always last.
     md: dict = None,
 ):
     """Fly scan: move motor through range while acquiring detector frames.
 
     The motor traverses ``p_initial → ≤ p_final``, maintaining constant
     velocity between ``p_start → p_end`` to deliver ``num_frames`` frames
-    within ``[p_start, p_end]``.  ``p_initial`` and ``p_final`` are computed
-    from ``p_start``, ``p_end``, the motor's ``.ACCL``, and
+    within ``[p_start, p_end]``.  ``p_initial`` and ``p_final`` are
+    computed from ``p_start``, ``p_end``, the motor's ``.ACCL``, and
     ``taxi_allowance``; ``num_frames`` is computed from
-    ``(p_end - p_start) * exposures_per_egu``.  Detector frames are
-    acquired continuously during the traverse; downstream processing
-    trims the data to ``[p_start, p_end]`` by motor position.  An HDF5
-    file containing every captured frame is written next to the run
-    (the path is in the run metadata under ``ad_file_path`` /
+    ``(p_end - p_start) * exposures_per_egu``.
+
+    Detector frames are acquired continuously during the traverse;
+    downstream processing trims the data to ``[p_start, p_end]`` by
+    motor position.
+
+    An HDF5 file containing every captured frame is written next to the
+    run (the path is in the run metadata under ``ad_file_path`` /
     ``ad_file_name``).
 
     Position geometry
@@ -2573,6 +2551,15 @@ def flyscan(
         Increase if your run-engine subscriptions can't keep up;
         decrease only for very high frame rates.  Rarely needs to
         be changed.
+    _force_hdf_nonblocking : bool, default ``False``
+        Internal/diagnostic.  ``False`` keeps the safe mode
+        (``blocking_callbacks="Yes"``), where the cam back-throttles
+        to the HDF write rate so no frames are dropped.  ``True``
+        forces ``blocking_callbacks="No"``, letting the HDF plugin
+        drop frames.  Its only legitimate use is to demonstrate the
+        ``FlyscanDataLossWarning`` code path: set ``True``, push
+        ``exposures_per_egu`` past what the HDF can sustain, and watch
+        the post-scan warning fire.  Not for production data collection.
     md : dict, optional
         Additional metadata to record under the run's ``start``
         document.  Merged on top of the plan's computed metadata.
