@@ -1,0 +1,101 @@
+<?xml version="1.0" standalone="no" ?>
+<!--
+  NeXus HDF5 layout for the 3-ID-C Eiger2 NDFileHDF5 plugin (dp_eiger_sn:HDF1:).
+
+  WARNING: this REPLACES the plugin's default file structure.  It is
+  reconstructed from the AreaDetector default NeXus layout PLUS custom
+  detector_stage / sample_stage position groups.
+
+  SAFEST PATH (recommended): do NOT swap in this whole file blindly.  Pull
+  your IOC's CURRENT layout file and copy just the two blocks
+      <group name="detector_stage"> ... </group>
+      <group name="sample_stage">   ... </group>
+  into it, so you keep the rest of your proven structure.  In particular the
+  flyscan external-links the image group at "/entry/data", so whatever your
+  layout does, "/entry/data" MUST keep holding the image data (this file
+  preserves that via the hardlink near the bottom).
+
+  HOW TO DEPLOY (only if you use a custom layout):
+    caput dp_eiger_sn:HDF1:XMLFileName "/path/on/ioc/layout.xml"
+    caget dp_eiger_sn:HDF1:XMLValid_RBV        (want 1)
+    caget dp_eiger_sn:HDF1:XMLErrorMsg_RBV     (should be empty)
+  Requires attributes.xml loaded too (the position datasets below pull from
+  its ndattributes by name).
+
+  Each dataset with source="ndattribute" grows by one element PER FRAME, so
+  these position datasets are arrays aligned 1:1 with the image stack.
+-->
+<hdf5_layout>
+  <group name="entry">
+    <attribute name="NX_class" source="constant" value="NXentry" type="string" />
+
+    <group name="instrument">
+      <attribute name="NX_class" source="constant" value="NXinstrument" type="string" />
+
+      <!-- image data (the detector frames) -->
+      <group name="detector">
+        <attribute name="NX_class" source="constant" value="NXdetector" type="string" />
+        <dataset name="data" source="detector" det_default="true">
+          <attribute name="NX_class" source="constant" value="SDS" type="string" />
+          <attribute name="signal" source="constant" value="1" type="int" />
+        </dataset>
+        <!-- catch-all: any ndattribute not explicitly placed below lands here -->
+        <group name="NDAttributes" ndattr_default="true">
+          <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        </group>
+      </group>
+
+      <!-- detector_stage positions (one value per frame) -->
+      <group name="detector_stage">
+        <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        <dataset name="det_x" source="ndattribute" ndattribute="det_x">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+        <dataset name="eiger_y" source="ndattribute" ndattribute="eiger_y">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+        <dataset name="eiger_z" source="ndattribute" ndattribute="eiger_z">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+      </group>
+
+      <!-- sample_stage positions (one value per frame) -->
+      <group name="sample_stage">
+        <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        <dataset name="omega" source="ndattribute" ndattribute="omega">
+          <attribute name="units" source="constant" value="degrees" type="string" />
+        </dataset>
+        <dataset name="xprime" source="ndattribute" ndattribute="xprime">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+        <dataset name="base_y" source="ndattribute" ndattribute="base_y">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+        <dataset name="zprime" source="ndattribute" ndattribute="zprime">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+      </group>
+
+      <!-- exposure metadata -->
+      <group name="acquisition">
+        <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        <dataset name="acquire_time" source="ndattribute" ndattribute="acquire_time">
+          <attribute name="units" source="constant" value="s" type="string" />
+        </dataset>
+        <dataset name="num_images" source="ndattribute" ndattribute="num_images" />
+      </group>
+    </group>
+
+    <!-- default plottable data: hardlink to the image stack -->
+    <!-- KEEP THIS: the flyscan external-links /entry/data as the images. -->
+    <group name="data">
+      <attribute name="NX_class" source="constant" value="NXdata" type="string" />
+      <hardlink name="data" target="/entry/instrument/detector/data" />
+    </group>
+  </group>
+
+  <!-- frame timestamps (default AD behaviour) -->
+  <group name="performance">
+    <dataset name="timestamp" source="ndattribute" />
+  </group>
+</hdf5_layout>
