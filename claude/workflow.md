@@ -49,6 +49,21 @@ git push -u origin feature/<short-name>
 Because `claude/` is git-ignored on every branch derived from `main`, it
 cannot leak into these PRs.
 
+## Gotcha: the folder is deleted when you leave `claude-context`
+
+Because `claude/` is **tracked** on `claude-context` but ignored elsewhere,
+switching *from* `claude-context` back to `main` makes git delete the folder
+from the working tree. Restore it (worktree only, so it stays unstaged and
+ignored) with:
+
+```bash
+git restore --source=origin/claude-context --worktree -- claude/
+```
+
+Once restored this way it is untracked+ignored, so it survives ordinary
+`main` <-> `feature/*` switches. It is only clobbered again by visiting
+`claude-context` and returning — so re-run the restore after each sync.
+
 ## Syncing the claude-context branch (updating this folder)
 
 The `claude/` folder is ignored everywhere, so it must be force-added on the
@@ -59,17 +74,17 @@ git checkout claude-context
 git add -f claude/                  # -f overrides .gitignore
 git commit -m "claude: update repo-management context"
 git push origin claude-context
-git checkout main                   # ignored claude/ files remain in the tree
+git checkout main
+git restore --source=origin/claude-context --worktree -- claude/  # bring folder back
 ```
 
-To restore this folder on a fresh clone:
+To populate this folder on a fresh clone (without switching branches):
 
 ```bash
 git clone https://github.com/d-beniwal/3idc-bits.git
 cd 3idc-bits
 git fetch origin claude-context
-git checkout claude-context -- claude/   # populate the folder without switching branches
-# or: git checkout claude-context         # switch fully to the branch
+git restore --source=origin/claude-context --worktree -- claude/
 ```
 
 ## Commit message convention
