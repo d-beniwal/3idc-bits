@@ -189,3 +189,7 @@ qserver/existing_plans_and_devices.yaml
 
 # Working notes / design docs kept in-repo but not committed
 .nogit_*
+
+# Claude Code context folder — synced to fork on the `claude-context` branch
+# only, never on main/feature branches, so it never enters upstream PRs.
+claude/
