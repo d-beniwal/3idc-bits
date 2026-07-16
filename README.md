@@ -30,6 +30,27 @@ from id3c.startup import *
 RE(sim_print_plan())
 ```
 
+## Plan-runner GUI
+
+A small Tkinter GUI helps build a plan command and start a session. Run it
+from the repository root (needs only the standard-library `tkinter`):
+
+```bash
+python gui/3idc_tk.py
+```
+
+**Build a command.** Tick a plan file in the left panel (it scans
+`src/id3c/user/`; `setup_june_26.py` is checked by default), choose a plan,
+fill in the parameters, then click **Build / Update** and **Copy** the
+generated two-line `import` + `RE(...)` command to paste into IPython.
+
+**Launch Bluesky.** *Before* clicking **▶ Launch Bluesky**, set the **Work
+dir** field in the top bar to the folder where the session should start (this
+is where data and logs are written; it is created if it does not exist). The
+button then opens a terminal in that folder and runs `start_3idc_bluesky.sh`,
+which activates the `3idc-bits` conda environment and starts IPython with the
+instrument loaded (`from id3c.startup import *`).
+
 ## Contributing
 
 Repository conventions live in
