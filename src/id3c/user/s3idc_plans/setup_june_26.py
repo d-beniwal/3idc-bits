@@ -46,8 +46,6 @@ document its arguments in one fixed grammar.  Use a standard NumPy
   paragraph.
 """
 
-import logging
-
 from apsbits.core.instrument_init import oregistry
 from bluesky import plan_stubs as bps  # noqa: F401
 from bluesky import plans as bp  # noqa: F401
@@ -56,8 +54,6 @@ from bluesky.utils import plan
 from ophyd.status import SubscriptionStatus
 
 from id3c.plans.flyscan_3idc import flyscan
-
-#logger = logging.getLogger(__name__)
 
 
 def _wait_cam_idle(det, timeout):
@@ -171,11 +167,16 @@ def _acquire_single_file(det, fname, file_write_mode, exposure_time):
     Used per-point by ``fixed_exp_at_det_steps``.
     """
     yield from bps.mv(
-        det.hdf1.file_name, fname,
-        det.hdf1.file_write_mode, file_write_mode,
-        det.hdf1.num_capture, 1,
-        det.hdf1.auto_save, "Yes",
-        det.hdf1.auto_increment, "Yes",
+        det.hdf1.file_name,
+        fname,
+        det.hdf1.file_write_mode,
+        file_write_mode,
+        det.hdf1.num_capture,
+        1,
+        det.hdf1.auto_save,
+        "Yes",
+        det.hdf1.auto_increment,
+        "Yes",
     )
     if file_write_mode == "Capture":
         yield from bps.mv(det.hdf1.capture, 1)  # open HDF capture (resets num_captured)
@@ -296,7 +297,8 @@ def sweep_xy_integrate_one(
     Example::
 
         RE(sweep_xy_integrate_one(-1, 1, -1, 1, exposure_time=10))
-        RE(sweep_xy_integrate_one(0, 2, 0, 2, exposure_time=30, n_rows=10, file_name="sampleA"))
+        RE(sweep_xy_integrate_one(0, 2, 0, 2, exposure_time=30, n_rows=10,
+                                  file_name="sampleA"))
     """
     if n_rows < 1:
         raise ValueError("n_rows must be >= 1")
@@ -324,7 +326,8 @@ def sweep_xy_integrate_one(
     v_x_original = xm.velocity.get()  # restored in cleanup
 
     print(
-        f"sweep_xy_integrate_one: raster X[{x_start},{x_end}] x Y[{y_start},{y_end}] in "
+        f"sweep_xy_integrate_one: raster X[{x_start},{x_end}] x "
+        f"Y[{y_start},{y_end}] in "
         f"{n_rows} rows, v_x={v_x:g} EGU/s, single {exposure_time:g}s frame "
         f"-> {file_name}"
     )
@@ -340,10 +343,14 @@ def sweep_xy_integrate_one(
 
         # configure the detector for ONE integrated frame
         yield from bps.mv(
-            eiger2.cam.image_mode, "Single",
-            eiger2.cam.num_images, 1,
-            eiger2.cam.acquire_time, exposure_time,
-            eiger2.cam.acquire_period, exposure_time,
+            eiger2.cam.image_mode,
+            "Single",
+            eiger2.cam.num_images,
+            1,
+            eiger2.cam.acquire_time,
+            exposure_time,
+            eiger2.cam.acquire_period,
+            exposure_time,
         )
         # The Eiger leaves Acquire_RBV at "Acquiring" after a frame and
         # only drops acquire_busy promptly with wait_for_plugins=Yes, so
@@ -355,12 +362,18 @@ def sweep_xy_integrate_one(
         # fire-and-forget with .put() like configure_adsimdet does.
         eiger2.hdf1.file_template.put("%s%s_%6.6d.h5")
         yield from bps.mv(
-            eiger2.hdf1.file_path, file_path,
-            eiger2.hdf1.file_name, file_name,
-            eiger2.hdf1.file_write_mode, file_write_mode,
-            eiger2.hdf1.num_capture, 1,
-            eiger2.hdf1.auto_save, "Yes",
-            eiger2.hdf1.auto_increment, "Yes",
+            eiger2.hdf1.file_path,
+            file_path,
+            eiger2.hdf1.file_name,
+            file_name,
+            eiger2.hdf1.file_write_mode,
+            file_write_mode,
+            eiger2.hdf1.num_capture,
+            1,
+            eiger2.hdf1.auto_save,
+            "Yes",
+            eiger2.hdf1.auto_increment,
+            "Yes",
         )
         if file_write_mode == "Capture":
             yield from bps.mv(eiger2.hdf1.capture, 1)  # arm capture
@@ -526,7 +539,9 @@ def sweep_xy_integrate_steps(
     if frame_exposure is None:
         frame_exposure = frame_period
     if not (0 < frame_exposure <= frame_period):
-        raise ValueError("frame_exposure must satisfy 0 < frame_exposure <= frame_period")
+        raise ValueError(
+            "frame_exposure must satisfy 0 < frame_exposure <= frame_period"
+        )
     lx = abs(x_end - x_start)
     if lx == 0:
         raise ValueError("x_start and x_end must differ (X is the swept axis).")
@@ -553,7 +568,8 @@ def sweep_xy_integrate_steps(
     v_x_original = xm.velocity.get()  # restored in cleanup
 
     print(
-        f"sweep_xy_integrate_steps: raster X[{x_start},{x_end}] x Y[{y_start},{y_end}] in "
+        f"sweep_xy_integrate_steps: raster X[{x_start},{x_end}] x "
+        f"Y[{y_start},{y_end}] in "
         f"{n_rows} rows, {n_frames} frame(s) @ {frame_period:g}s period "
         f"(exposure {frame_exposure:g}s), total~{effective_total:g}s, "
         f"v_x={v_x:g} EGU/s -> {file_name}"
@@ -570,10 +586,14 @@ def sweep_xy_integrate_steps(
 
         # configure the detector for a SERIES of n_frames frames
         yield from bps.mv(
-            eiger2.cam.image_mode, "Multiple",
-            eiger2.cam.num_images, n_frames,
-            eiger2.cam.acquire_time, frame_exposure,
-            eiger2.cam.acquire_period, frame_period,
+            eiger2.cam.image_mode,
+            "Multiple",
+            eiger2.cam.num_images,
+            n_frames,
+            eiger2.cam.acquire_time,
+            frame_exposure,
+            eiger2.cam.acquire_period,
+            frame_period,
         )
         # The Eiger leaves Acquire_RBV at "Acquiring" after frames and
         # only drops acquire_busy promptly with wait_for_plugins=Yes, so
@@ -585,12 +605,18 @@ def sweep_xy_integrate_steps(
         # fire-and-forget with .put() like configure_adsimdet does.
         eiger2.hdf1.file_template.put("%s%s_%6.6d.h5")
         yield from bps.mv(
-            eiger2.hdf1.file_path, file_path,
-            eiger2.hdf1.file_name, file_name,
-            eiger2.hdf1.file_write_mode, file_write_mode,
-            eiger2.hdf1.num_capture, n_frames,
-            eiger2.hdf1.auto_save, "Yes",
-            eiger2.hdf1.auto_increment, "Yes",
+            eiger2.hdf1.file_path,
+            file_path,
+            eiger2.hdf1.file_name,
+            file_name,
+            eiger2.hdf1.file_write_mode,
+            file_write_mode,
+            eiger2.hdf1.num_capture,
+            n_frames,
+            eiger2.hdf1.auto_save,
+            "Yes",
+            eiger2.hdf1.auto_increment,
+            "Yes",
         )
         if file_write_mode == "Capture":
             yield from bps.mv(eiger2.hdf1.capture, 1)  # arm capture
@@ -896,7 +922,8 @@ def omega_fly_at_sam_steps(
 
     Rasters the *sample* over a rectangular grid of ``n_x`` x ``n_y``
     positions -- ``samX`` is ``sample_stage.xprime`` and ``samY`` is
-    ``sample_stage.base_y`` (the same axes ``sweep_xy_integrate_one``/``sweep_xy_integrate_steps``
+    ``sample_stage.base_y`` (the same axes
+    ``sweep_xy_integrate_one``/``sweep_xy_integrate_steps``
     translate) -- and at every grid point runs a full ``omega_fly``
     (continuous omega fly with the Eiger2, one HDF5 file per point).
 
@@ -1237,10 +1264,14 @@ def fixed_exp_at_det_steps(
 
         # 3. configure the cam (per-point file name is set in _acquire_single_file)
         yield from bps.mv(
-            eiger2.cam.image_mode, "Single",
-            eiger2.cam.num_images, 1,
-            eiger2.cam.acquire_time, exposure_time,
-            eiger2.cam.acquire_period, exposure_time,
+            eiger2.cam.image_mode,
+            "Single",
+            eiger2.cam.num_images,
+            1,
+            eiger2.cam.acquire_time,
+            exposure_time,
+            eiger2.cam.acquire_period,
+            exposure_time,
         )
         if hasattr(eiger2.cam, "wait_for_plugins"):
             yield from bps.mv(eiger2.cam.wait_for_plugins, "Yes")
