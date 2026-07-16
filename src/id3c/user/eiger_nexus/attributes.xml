@@ -1,0 +1,44 @@
+<?xml version="1.0" standalone="no" ?>
+<!--
+  NDAttributes for the 3-ID-C Eiger2 (PV prefix: dp_eiger_sn:).
+
+  Captures detector-stage + sample-stage motor positions (and key
+  acquisition parameters) into EVERY HDF5 file the NDFileHDF5 plugin
+  writes.  NDAttributes attach to each NDArray, so every declared value
+  is written ONCE PER FRAME: multi-frame files (flyscan, sweep_xy_frames,
+  det_step_scan) get per-frame positions for free; single-frame files get
+  one value.
+
+  HOW TO DEPLOY (run on / against the IOC host, NOT from a plan):
+    1. Copy this file somewhere on the IOC's filesystem.
+    2. Point the camera/driver at it so attributes attach to frames:
+         caput dp_eiger_sn:cam1:NDAttributesFile "/path/on/ioc/attributes.xml"
+       VERIFY the cam prefix (cam1: vs cam:) e.g. with
+         caget dp_eiger_sn:cam1:Acquire_RBV
+    3. Check it loaded cleanly:
+         caget dp_eiger_sn:cam1:NDAttributesStatus     (want OK / 0)
+    With the DEFAULT HDF layout these all land in the file's default
+    NDAttributes group automatically; you do NOT need layout.xml unless
+    you want custom locations (see layout.xml in this folder).
+
+  EPICS_PV source = the PV to read; motor readback field = <motor>.RBV.
+  Motor PVs below are kept in sync with src/id3c/configs/devices.yml
+  (the authoritative device config).  det_x (3idc:m69) and eiger_y
+  (3idc:m70) were previously mis-mapped to 3idc:m43 / 3idc:m35.
+-->
+<Attributes>
+  <!-- detector_stage (mm) -->
+  <Attribute name="det_x"   type="EPICS_PV" source="3idc:m69.RBV"   dbrtype="DBR_DOUBLE" description="detector_stage det_x (mm)"/>
+  <Attribute name="eiger_y" type="EPICS_PV" source="3idc:m70.RBV"   dbrtype="DBR_DOUBLE" description="detector_stage eiger_y (mm)"/>
+  <Attribute name="eiger_z" type="EPICS_PV" source="3idc:m36.RBV"   dbrtype="DBR_DOUBLE" description="detector_stage eiger_z (mm)"/>
+
+  <!-- sample_stage -->
+  <Attribute name="omega"   type="EPICS_PV" source="3idxps1:m5.RBV" dbrtype="DBR_DOUBLE" description="sample_stage omega (deg)"/>
+  <Attribute name="xprime"  type="EPICS_PV" source="3idxps1:m4.RBV" dbrtype="DBR_DOUBLE" description="sample_stage xprime (mm)"/>
+  <Attribute name="base_y"  type="EPICS_PV" source="3idc:m42.RBV"   dbrtype="DBR_DOUBLE" description="sample_stage base_y (mm)"/>
+  <Attribute name="zprime"  type="EPICS_PV" source="3idxps1:m3.RBV" dbrtype="DBR_DOUBLE" description="sample_stage zprime (mm)"/>
+
+  <!-- acquisition parameters (verify cam prefix) -->
+  <Attribute name="acquire_time" type="EPICS_PV" source="dp_eiger_sn:cam1:AcquireTime_RBV" dbrtype="DBR_DOUBLE" description="exposure time per frame (s)"/>
+  <Attribute name="num_images"   type="EPICS_PV" source="dp_eiger_sn:cam1:NumImages_RBV"   dbrtype="DBR_LONG"   description="images per acquisition"/>
+</Attributes>
