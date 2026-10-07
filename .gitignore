@@ -193,3 +193,7 @@ qserver/existing_plans_and_devices.yaml
 # Claude Code context folder — synced to fork on the `claude-context` branch
 # only, never on main/feature branches, so it never enters upstream PRs.
 claude/
+
+# Local scratch work / ad hoc scripts — not part of the package, kept local only
+/scratch/
+/scripts/
