@@ -19,6 +19,11 @@ counterparts that carry that grammar:
 * ``sim_plans`` -- thin ``@plan`` *wrappers* around ``id3c.plans.sim_plans``.
   These delegate rather than copy, so the simulator logic has exactly one
   home and only the docstrings live here.
+* ``setup_june_26`` -- a hand-maintained *copy* of
+  ``id3c.user.s3idc_plans.setup_june_26``, which already documents its
+  plans in this grammar.  Nothing is reformatted; the copy exists purely so
+  these plans are selectable from this subpackage.  Re-sync it by hand if
+  the ``s3idc_plans`` version changes.
 
 Nothing here is imported by ``id3c.startup`` automatically::
 
