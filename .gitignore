@@ -190,9 +190,12 @@ qserver/existing_plans_and_devices.yaml
 # Working notes / design docs kept in-repo but not committed
 .nogit_*
 
-# Claude Code context folder — synced to fork on the `claude-context` branch
-# only, never on main/feature branches, so it never enters upstream PRs.
+# Claude Code context — kept LOCAL only, never committed on any branch, so it
+# never enters upstream PRs. (Retired: `claude/` folder + `claude-context`
+# branch; still on origin/claude-context as a backup of old notes.)
 claude/
+.context/
+/CLAUDE.md
 
 # Local scratch work / ad hoc scripts — not part of the package, kept local only
 /scratch/
