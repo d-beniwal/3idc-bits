@@ -7,9 +7,11 @@
   detector_stage / sample_stage position groups.
 
   SAFEST PATH (recommended): do NOT swap in this whole file blindly.  Pull
-  your IOC's CURRENT layout file and copy just the two blocks
+  your IOC's CURRENT layout file and copy just the four blocks
       <group name="detector_stage"> ... </group>
       <group name="sample_stage">   ... </group>
+      <group name="laser_optics">   ... </group>
+      <group name="beam_monitors">  ... </group>
   into it, so you keep the rest of your proven structure.  In particular the
   flyscan external-links the image group at "/entry/data", so whatever your
   layout does, "/entry/data" MUST keep holding the image data (this file
@@ -73,6 +75,28 @@
         </dataset>
         <dataset name="zprime" source="ndattribute" ndattribute="zprime">
           <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+      </group>
+
+      <!-- laser_optics positions (one value per frame) -->
+      <group name="laser_optics">
+        <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        <dataset name="us" source="ndattribute" ndattribute="laser_us">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+        <dataset name="ds" source="ndattribute" ndattribute="laser_ds">
+          <attribute name="units" source="constant" value="mm" type="string" />
+        </dataset>
+      </group>
+
+      <!-- beam monitor readbacks (one value per frame) -->
+      <group name="beam_monitors">
+        <attribute name="NX_class" source="constant" value="NXcollection" type="string" />
+        <dataset name="ic0_b_vdc" source="ndattribute" ndattribute="ic0_b_vdc">
+          <attribute name="units" source="constant" value="V" type="string" />
+        </dataset>
+        <dataset name="ic0_c_vdc" source="ndattribute" ndattribute="ic0_c_vdc">
+          <attribute name="units" source="constant" value="V" type="string" />
         </dataset>
       </group>
 

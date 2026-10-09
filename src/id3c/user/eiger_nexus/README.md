@@ -9,11 +9,17 @@ Based on the NeXus manual's EPICS example:
 https://manual.nexusformat.org/examples/epics/index.html
 
 ## Files
-- **`attributes.xml`** — declares which EPICS PVs to capture as *NDAttributes*
-  (det_x / eiger_y / eiger_z, omega / xprime / base_y / zprime, exposure).
-  Attributes attach to every NDArray ⇒ **one value per frame**.
+- **`attributes.xml`** — declares which EPICS PVs to capture as *NDAttributes*:
+  det_x / eiger_y / eiger_z (detector_stage), omega / xprime / base_y / zprime
+  (sample_stage), laser_us / laser_ds (laser_optics), ic0_b_vdc / ic0_c_vdc
+  (beam_monitors), plus exposure time / num_images. Attributes attach to every
+  NDArray ⇒ **one value per frame**. `shutterc` is excluded (no status
+  readback PV, only Open/Close commands) and the scaler channels
+  (`scaler_b`/`scaler_c`) are excluded (unassigned/commented out in
+  `devices.yml`, so there is no specific channel PV to source).
 - **`layout.xml`** — *optional*. Defines where those land in the HDF5 tree
-  (`/entry/instrument/detector_stage/…`, `/entry/instrument/sample_stage/…`).
+  (`/entry/instrument/detector_stage/…`, `/entry/instrument/sample_stage/…`,
+  `/entry/instrument/laser_optics/…`, `/entry/instrument/beam_monitors/…`).
   Replaces the plugin's default layout, so handle with care (see below).
 
 ## Two ways to use this
@@ -36,7 +42,8 @@ caget dp_eiger_sn:HDF1:XMLValid_RBV            # expect 1
 caget dp_eiger_sn:HDF1:XMLErrorMsg_RBV         # expect empty
 ```
 **Safest:** rather than swapping in `layout.xml` wholesale, copy just the
-`<group name="detector_stage">` / `<group name="sample_stage">` blocks into
+`<group name="detector_stage">` / `<group name="sample_stage">` /
+`<group name="laser_optics">` / `<group name="beam_monitors">` blocks into
 your IOC's *current* layout file. The flyscan external-links `/entry/data`
 as the image stack, so that group must keep holding the image data (this
 file preserves it via the hardlink at the end).

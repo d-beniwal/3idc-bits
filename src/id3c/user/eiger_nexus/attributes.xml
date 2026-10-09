@@ -22,9 +22,16 @@
     you want custom locations (see layout.xml in this folder).
 
   EPICS_PV source = the PV to read; motor readback field = <motor>.RBV.
-  Motor PVs below are kept in sync with src/id3c/configs/devices.yml
-  (the authoritative device config).  det_x (3idc:m69) and eiger_y
-  (3idc:m70) were previously mis-mapped to 3idc:m43 / 3idc:m35.
+  PVs below are kept in sync with src/id3c/configs/devices.yml (the
+  authoritative device config).  det_x (3idc:m69) and eiger_y (3idc:m70)
+  were previously mis-mapped to 3idc:m43 / 3idc:m35.
+
+  laser_optics.us/ds and the IC0_B/IC0_C monitor channels are the other
+  live, readback-capable signals currently defined in devices.yml;
+  shutterc is excluded because ApsPssShutter has no status readback PV
+  (only Open/Close commands), and the scaler channels (scaler_b/scaler_c)
+  are commented out / unassigned there, so there is nothing meaningful to
+  source yet.
 -->
 <Attributes>
   <!-- detector_stage (mm) -->
@@ -37,6 +44,14 @@
   <Attribute name="xprime"  type="EPICS_PV" source="3idxps1:m4.RBV" dbrtype="DBR_DOUBLE" description="sample_stage xprime (mm)"/>
   <Attribute name="base_y"  type="EPICS_PV" source="3idc:m42.RBV"   dbrtype="DBR_DOUBLE" description="sample_stage base_y (mm)"/>
   <Attribute name="zprime"  type="EPICS_PV" source="3idxps1:m3.RBV" dbrtype="DBR_DOUBLE" description="sample_stage zprime (mm)"/>
+
+  <!-- laser_optics (mm); must read OUT for omega to be movable -->
+  <Attribute name="laser_us" type="EPICS_PV" source="3idxps1:m1.RBV" dbrtype="DBR_DOUBLE" description="laser_optics us (mm)"/>
+  <Attribute name="laser_ds" type="EPICS_PV" source="3idxps1:m2.RBV" dbrtype="DBR_DOUBLE" description="laser_optics ds (mm)"/>
+
+  <!-- beam monitors (ion chamber ADC readbacks, V) -->
+  <Attribute name="ic0_b_vdc" type="EPICS_PV" source="3ida:ADC_5.VAL" dbrtype="DBR_DOUBLE" description="beam_monitors IC0_B_VDC (V)"/>
+  <Attribute name="ic0_c_vdc" type="EPICS_PV" source="3ida:ADC_6.VAL" dbrtype="DBR_DOUBLE" description="beam_monitors IC0_C_VDC (V)"/>
 
   <!-- acquisition parameters (verify cam prefix) -->
   <Attribute name="acquire_time" type="EPICS_PV" source="dp_eiger_sn:cam1:AcquireTime_RBV" dbrtype="DBR_DOUBLE" description="exposure time per frame (s)"/>
