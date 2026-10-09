@@ -215,20 +215,35 @@ def _ensure_detector_idle(det, timeout=30.0):
         print(f"_ensure_detector_idle: hdf capture stop failed: {exc!r}")
 
 
-def _fmt_pos(value):
-    """Compact, dot-free position token for file names (2 decimal places).
+def _fmt_pos(value, decimals=2):
+    """Compact, dot-free position token for file names.
 
     Renders a coordinate so it is safe to embed in an HDF5 base name (the
     IOC appends ``_NNNNNN.h5``): trailing zeros trimmed and the decimal
     point written as ``p`` so there is no ``.`` before ``.h5``.  The sign
     is kept as ``-`` (the established ``EigPos`` file-name convention keeps
-    ``-``).  Examples: ``1.25 -> "1p25"``, ``-0.5 -> "-0p5"``,
+    ``-``).  ``decimals`` sets the rounding precision before trimming.
+    Examples: ``1.25 -> "1p25"``, ``-0.5 -> "-0p5"``,
     ``2.0 -> "2"``, ``0 -> "0"``.
     """
-    s = f"{value:.2f}".rstrip("0").rstrip(".")
+    s = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
     if s in ("", "-0"):
         s = "0"
     return s.replace(".", "p")
+
+
+def _decimal_places(value, max_decimals=6):
+    """Count significant decimal digits in ``value``.
+
+    Rounds to ``max_decimals`` first so float arithmetic noise (e.g. a
+    grid step like ``1/3`` rendering as ``0.3333333333333333``) can't blow
+    the count up; trailing zeros are then trimmed so an exact value like
+    ``0.50`` still reports 1, not ``max_decimals``.
+    """
+    s = f"{value:.{max_decimals}f}".rstrip("0").rstrip(".")
+    if "." not in s:
+        return 0
+    return len(s.split(".", 1)[1])
 
 
 @plan
@@ -945,10 +960,13 @@ def omega_fly_at_sam_steps(
 
         <file_name>_<x>_<y>_000001
 
-    where ``<x>``/``<y>`` are the commanded samX/samY grid values rounded
-    to 2 decimals (decimal point written as ``p``, e.g. ``-0p5_1p25``) and
-    ``_000001`` is the IOC's trailing counter (constant per run), e.g.
-    ``omeFly_sam_-1_0p5_000001``.
+    where ``<x>``/``<y>`` are the commanded samX/samY grid values (decimal
+    point written as ``p``, e.g. ``-0p5_1p25``) and ``_000001`` is the
+    IOC's trailing counter (constant per run), e.g.
+    ``omeFly_sam_-1_0p5_000001``.  The rounding precision is derived
+    automatically from ``x_start``/``x_end``/``y_start``/``y_end`` and the
+    resulting grid step, so names stay unique even for sub-10-micron
+    spacings that a fixed 2-decimal rounding would have collapsed together.
 
     Parameters
     ----------
@@ -1013,6 +1031,7 @@ def omega_fly_at_sam_steps(
     # negative -> positive, regardless of the order x_start/x_end were
     # passed in.
     x_lo, x_hi = sorted((x_start, x_end))
+    dx = None
     if n_x == 1:
         x_cols = [x_lo]
     else:
@@ -1020,11 +1039,27 @@ def omega_fly_at_sam_steps(
         x_cols = [x_lo + i * dx for i in range(n_x)]
 
     # samY rows: visited in the order given (y_start -> y_end).
+    dy = None
     if n_y == 1:
         y_rows = [y_start]
     else:
         dy = (y_end - y_start) / (n_y - 1)
         y_rows = [y_start + i * dy for i in range(n_y)]
+
+    # File-name precision: match whatever decimal precision the caller's
+    # own inputs/grid step carry (instead of a fixed 2 decimals), so grid
+    # spacings finer than that (e.g. < 10 micron) still get distinct file
+    # names rather than colliding after rounding.
+    decimals = max(
+        _decimal_places(x_start),
+        _decimal_places(x_end),
+        _decimal_places(y_start),
+        _decimal_places(y_end),
+    )
+    if dx is not None:
+        decimals = max(decimals, _decimal_places(dx))
+    if dy is not None:
+        decimals = max(decimals, _decimal_places(dy))
 
     n_points = n_x * n_y
     print(
@@ -1051,7 +1086,9 @@ def omega_fly_at_sam_steps(
                 ry = yield from bps.rd(ym)
 
                 # 3. per-point file name: requested coords + point number.
-                fname = f"{file_name}_{_fmt_pos(xval)}_{_fmt_pos(yval)}"
+                x_tok = _fmt_pos(xval, decimals)
+                y_tok = _fmt_pos(yval, decimals)
+                fname = f"{file_name}_{x_tok}_{y_tok}"
                 print(
                     f"omega_fly_at_sam_steps: [{offset}/{n_points}] "
                     f"samX={xval:g}, samY={yval:g} "
