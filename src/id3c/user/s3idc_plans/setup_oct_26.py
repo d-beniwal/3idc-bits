@@ -40,9 +40,22 @@ GUI-parseable docstrings: same fixed NumPy ``Parameters`` grammar as
 grammar spec; not repeated here.
 """
 
+import logging
+import time
+
 from apsbits.core.instrument_init import oregistry
 from bluesky import plan_stubs as bps  # noqa: F401
+from bluesky import preprocessors as bpp
 from bluesky.utils import plan
+
+from id3c.plans.flyscan_3idc import CacheParameters
+from id3c.plans.flyscan_3idc import _safe_get
+from id3c.plans.flyscan_3idc import check_hdf_file_path
+from id3c.plans.flyscan_3idc import restore_stage_sigs
+from id3c.plans.flyscan_3idc import snapshot_stage_sigs
+from id3c.plans.flyscan_3idc import wait_for_acquire_drained
+
+logger = logging.getLogger(__name__)
 
 
 def _pop_keys(stage_sigs, keys):
@@ -144,3 +157,354 @@ def cont_aq(
     # must NOT wait on this set (same reasoning as every cam.acquire
     # fire-and-forget in setup_june_26.py).
     yield from bps.abs_set(eiger2.cam.acquire, 1)
+
+
+@plan
+def fixed_count_acquire(
+    num_images: int = 500,
+    acquire_time: float = 0.02,
+    file_name: str = "fixedCount",
+    file_path: str = "/home/sector3/s3ida/XRD/2026-2/setup/June17/",
+    compression: str = "zlib",
+    drain_timeout: float = None,
+    md: dict = None,
+):
+    """Acquire a fixed number of Eiger2 frames, no motor motion (HDF throughput test).
+
+    Diagnostic plan -- isolates whether the multi-minute post-scan HDF5
+    "Writing"/"Capturing" hold-up seen after ``omega_fly``/``flyscan`` (see
+    the bluesky skill's project memory, "Post-p_end 'scan hangs for
+    minutes'", 2026-10-08) comes from something in ``flyscan_3idc.py``'s
+    own plan logic (the CA-monitor frame queue, consumer-tick event
+    emission, motor-coordination/``monitor_loop``) or whether it is purely
+    a property of the Eiger2 HDF plugin's write throughput.
+
+    This plan stages ``eiger2`` as close as possible to how ``flyscan``
+    stages it for a real scan:
+
+    * ``cam.image_mode = "Multiple"``, ``cam.num_images = num_images`` --
+      a real, finite count (unlike flyscan's geometry-driven, open-ended
+      acquisition), so the cam stops itself once ``num_images`` frames
+      are taken.
+    * ``cam.wait_for_plugins = "Yes"`` so ``cam.acquire_busy`` only drops
+      to 0 once every plugin (including ``hdf1``) has finished processing
+      the last frame -- the same signal ``flyscan_3idc.flyscan`` uses to
+      decide the scan is actually done.
+    * ``hdf1.file_write_mode = "Stream"`` -- flyscan never overrides this,
+      so a real flyscan run writes in Stream mode too (frames land on
+      disk incrementally, as they're captured, rather than being
+      buffered and flushed in one shot at ``Capture=0``); set explicitly
+      here so the match to flyscan is documented, not incidental. Still
+      paired with the same oversized upper-bound ``num_capture`` sizing
+      flyscan uses (``int(num_images * 1.5) + 20`` -- this bound applies
+      in Stream mode too, it is not a "Capture"-only setting), and the
+      same ``hdf1.blocking_callbacks = "Yes"`` / every other plugin's
+      ``blocking_callbacks = "No"`` throughput-throttling convention (no
+      dropped frames; the cam self-paces to the HDF write rate). Which
+      plugins count as "every other plugin" is discovered the same way
+      flyscan does it -- scanning ``eiger2.component_names`` for anything
+      exposing ``blocking_callbacks`` -- rather than a fixed, hand-picked
+      list, so it tracks ``devices.yml`` automatically if a plugin is
+      added or removed later.
+    * ``hdf1.compression`` -- same parameter flyscan exposes (default
+      ``"zlib"``, matching ``flyscan_3idc.flyscan``'s own default).
+      **Important for this specific investigation:** the beamtime runs
+      already analyzed (bluesky skill project memory, 2026-10-08 entry)
+      were actually taken with compression overridden to the literal
+      string ``"None"`` somewhere upstream of ``flyscan()`` (source of
+      that override not yet found) -- pass ``compression="None"`` here to
+      reproduce what those runs actually did, not the library default.
+    * ``hdf1.create_directory``, ``file_name``, ``file_number``,
+      ``file_path``, ``file_template``, ``auto_save``, ``auto_increment``
+      are set the same way ``flyscan_3idc.flyscan`` sets them: through
+      ``flyscan_3idc.CacheParameters`` (reused directly, not
+      re-implemented) -- a plan-stub cache that records each signal's
+      value with ``yield from cache.override(signal, value)`` and puts it
+      all back with ``yield from cache.restore()``. This includes
+      ``file_template`` via a normal *waited* ``bps.mv`` (matching
+      ``flyscan``'s own override list exactly): an earlier bluesky-skill
+      memory note claimed ``file_template``'s RBV reads back oddly and a
+      waited set times out, but that referred to the hand-rolled
+      ``setup_june_26.py`` plans -- the current ``flyscan_3idc.flyscan``
+      source does not special-case it, so this plan doesn't either.
+      ``check_hdf_file_path(eiger2)`` (also reused from
+      ``flyscan_3idc.py``) verifies the path actually exists on the IOC's
+      filesystem right after, before staging -- the same fail-fast flyscan
+      relies on instead of a confusing later "num_captured stuck at 0."
+
+    Deliberately **not** replicated: flyscan also resets
+    ``cam.array_counter``/``hdf1.array_counter``/``hdf1.dropped_arrays``/
+    ``hdf1.dropped_output_arrays`` to 0 per run via the same
+    ``CacheParameters`` mechanism. That is bookkeeping for flyscan's own
+    frame/position pairing, not part of the detector/plugin write path,
+    and some of those signals may not be writable on every IOC build
+    (flyscan tags them "(optional)"). This plan instead reads
+    ``hdf1.dropped_arrays`` once before arming and once after, and reports
+    the delta -- same diagnostic value (did *this* run drop frames) without
+    assuming those counters are settable.
+
+    but drives **none** of flyscan's own machinery: no motor, no
+    CA-monitor frame queue, no consumer tick, no per-point event
+    emission. The post-acquire wait reuses
+    ``id3c.plans.flyscan_3idc.wait_for_acquire_drained`` directly
+    (imported, not re-implemented), so this plan's notion of "drained" is
+    identical to flyscan's own -- any difference in measured drain
+    time/rate between this plan and a real ``omega_fly`` run is therefore
+    attributable to flyscan's extra plan logic, not to a different
+    definition of "done." ``hdf1.num_captured`` and
+    ``cam.array_counter`` are monitored throughout the run (same
+    diagnostic-stream idea flyscan uses) so the capture-rate-over-time
+    curve can be pulled from the Tiled catalog afterward and compared
+    directly against a flyscan run's.
+
+    Interpretation: if this plan shows the same few-fps drain ceiling
+    flyscan's post-p_end hang does (flyscan measured ~4.7-5.6 fps at
+    ``t_acquire=0.02s``), the bottleneck is confirmed to live outside
+    flyscan's plan logic (IOC HDF write throughput / filesystem /
+    network path). If this plan drains much faster, that points back at
+    something in flyscan's own monitor-loop/CA-queue implementation.
+
+    Like ``cont_aq``, every signal this plan changes on ``eiger2.cam``
+    and the plugins is applied through ``stage_sigs`` and reverted via
+    ``bps.unstage`` (automatic here, via ``bpp.stage_decorator``) --
+    the ``stage_sigs`` dicts themselves are snapshotted first and
+    restored in a ``finally`` so the overrides don't leak into some
+    other plan's later ``bps.stage(eiger2)`` call.
+
+    Parameters
+    ----------
+    num_images : int
+        Frame count :: Total number of frames to acquire in one burst
+        (sets ``cam.num_images`` and sizes the HDF plugin's capture
+        upper bound).
+    acquire_time : float [s]
+        Exposure per frame :: ``cam.acquire_time``; ``cam.acquire_period``
+        is set equal to it for back-to-back frames (matches flyscan's
+        ``t_acquire=t_period`` runs).
+    file_name : str
+        Output file prefix :: HDF5 file name prefix (``hdf1.file_name``).
+    file_path : str
+        Output directory :: HDF5 write directory, IOC's view
+        (``hdf1.file_path``).
+    compression : str
+        HDF5 compression :: ``hdf1.compression``; must match one of
+        ``eiger2.hdf1.compression.enum_strs`` if the IOC is reachable.
+        Pass ``"None"`` to reproduce the already-analyzed beamtime runs
+        (see Notes below), or try ``"lz4"`` for the untested faster-codec
+        idea from that same analysis.
+    drain_timeout : float [s]
+        Max drain wait :: Longest time to wait for the HDF plugin to
+        finish writing after acquisition stops; blank sizes it from
+        ``num_images`` (generous: measured flyscan drain rates have been
+        as low as ~3.6 fps).
+
+    Example::
+
+        RE(fixed_count_acquire(500, 0.02))
+        RE(fixed_count_acquire(500, 0.02, compression="None"))  # match the
+        # actual beamtime flyscan runs already analyzed, not flyscan's
+        # library default of "zlib"
+
+    Notes
+    -----
+    ``num_capture`` should stay well under ~1e6 for typical frame sizes
+    (the IOC's NDFileHDF5 plugin can overflow its internal byte-count
+    arithmetic for very large values -- see ``flyscan_3idc.
+    configure_adsimdet``'s docstring); not a concern at ``num_images=500``.
+    """
+    if num_images <= 0:
+        raise ValueError("num_images must be > 0")
+    if acquire_time <= 0:
+        raise ValueError("acquire_time must be > 0")
+
+    eiger2 = oregistry["eiger2"]
+
+    # Same compression validation flyscan_3idc.validate_flyscan_inputs does
+    # against the HDF plugin's enum_strs: a clear ValueError here beats a
+    # much-later, confusing IOC-side rejection at write time. Defensive:
+    # skip if enum_strs can't be read (offline IOC, mock, etc.).
+    try:
+        enum_strs = tuple(getattr(eiger2.hdf1.compression, "enum_strs", ()) or ())
+    except Exception as exc:
+        logger.debug("fixed_count_acquire: cannot read compression enum_strs: %r", exc)
+        enum_strs = ()
+    if enum_strs and compression not in enum_strs:
+        raise ValueError(
+            f"compression={compression!r} not in HDF plugin's allowed set"
+            f" {list(enum_strs)!r}."
+        )
+
+    hdf_num_capture = int(num_images * 1.5) + 20
+    if drain_timeout is None:
+        # Generous: measured flyscan drain rates have been as low as
+        # ~3.6 fps (bluesky skill memory, 2026-10-08 entry) -- size for
+        # a worse rate than anything seen so far, plus headroom, rather
+        # than guessing a fixed constant.
+        drain_timeout = max(60.0, num_images / 3.0)
+
+    _md = {
+        "plan_name": "fixed_count_acquire",
+        "num_images": num_images,
+        "acquire_time": acquire_time,
+        "hdf_num_capture": hdf_num_capture,
+        "ad_file_name": file_name,
+        "ad_file_path": file_path,
+        "purpose": (
+            "HDF throughput isolation test: same eiger2 detector staging"
+            " as flyscan_3idc.flyscan, no motor / monitor-loop logic"
+        ),
+    }
+    _md.update(md or {})
+
+    # file_name/file_path/file_template/file_number/auto_save/
+    # auto_increment/compression/create_directory are "caller is
+    # responsible for setting" fields (apstools.devices
+    # .AD_EpicsFileNameMixin._remove_caller_stage_sigs) -- set them the
+    # same way flyscan_3idc.flyscan does, via CacheParameters (plan-stub
+    # cache: records each signal's current value on override, restores
+    # it in one shot on restore()), reused directly here rather than
+    # re-implemented. create_directory must be set before file_path is
+    # used (same ordering flyscan uses).
+    original_cache = CacheParameters()
+    yield from original_cache.override(eiger2.hdf1.create_directory, -5)
+    for obj, value in [
+        (eiger2.hdf1.auto_increment, "Yes"),
+        (eiger2.hdf1.auto_save, "Yes"),
+        (eiger2.hdf1.compression, compression),
+        (eiger2.hdf1.file_name, file_name),
+        (eiger2.hdf1.file_number, 1),
+        (eiger2.hdf1.file_path, file_path),
+        (eiger2.hdf1.file_template, "%s%s_%6.6d.h5"),
+    ]:
+        yield from original_cache.override(obj, value)
+    # Verify the IOC can actually see file_path -- must happen before
+    # staging (same reasoning/helper as flyscan_3idc.flyscan: without
+    # this, a bad path fails silently inside the IOC and num_captured
+    # just stays 0 forever instead of raising here).
+    check_hdf_file_path(eiger2)
+
+    # Protect stage_sigs from leaking into some other plan's later
+    # bps.stage(eiger2) call -- same snapshot/restore flyscan_3idc.flyscan
+    # itself uses (reused directly here, not re-implemented).  Plugin
+    # discovery matches flyscan exactly: scan component_names for
+    # anything exposing blocking_callbacks, rather than a fixed list.
+    plugins = [
+        getattr(eiger2, nm)
+        for nm in eiger2.component_names
+        if hasattr(getattr(eiger2, nm), "blocking_callbacks")
+    ]
+    saved_stage_sigs = snapshot_stage_sigs(eiger2, eiger2.cam, eiger2.hdf1, *plugins)
+
+    try:
+        eiger2.cam.stage_sigs["image_mode"] = "Multiple"
+        eiger2.cam.stage_sigs["num_images"] = num_images
+        eiger2.cam.stage_sigs["acquire_time"] = acquire_time
+        eiger2.cam.stage_sigs["acquire_period"] = acquire_time
+        eiger2.cam.stage_sigs["array_callbacks"] = 1
+        if hasattr(eiger2.cam, "wait_for_plugins"):
+            eiger2.cam.stage_sigs["wait_for_plugins"] = "Yes"
+
+        # "Stream" (not "Capture") -- this is apstools' own class default
+        # (apstools.devices.AD_EpicsHdf5FileName.__init__ sets
+        # file_write_mode="Stream" unconditionally) and flyscan_3idc.flyscan
+        # never overrides it, so a real flyscan run writes in Stream mode
+        # too (frames land on disk as they're captured, not buffered and
+        # flushed in one shot at Capture=0). Set explicitly here so that
+        # match is documented, not incidental. ("Capture" mode is only
+        # used by configure_adsimdet, a standalone, non-plan helper for
+        # the generic adsimdet test IOC -- not by flyscan or this plan.)
+        eiger2.hdf1.stage_sigs["file_write_mode"] = "Stream"
+        eiger2.hdf1.stage_sigs["num_capture"] = hdf_num_capture
+        # Same throughput convention as flyscan_3idc.flyscan: block the
+        # HDF plugin (cam back-pressures to HDF write rate, no dropped
+        # frames) while every other plugin stays non-blocking. `plugins`
+        # already includes hdf1 itself (see the component_names scan
+        # above), so this loop distinguishes it by identity, same as
+        # flyscan's own loop over the identical list.
+        for plugin in plugins:
+            plugin.stage_sigs["blocking_callbacks"] = (
+                "Yes" if plugin is eiger2.hdf1 else "No"
+            )
+        # "capture" is already in hdf1.stage_sigs by default (apstools
+        # .AD_EpicsHdf5FileName.__init__); move it to the end so it is
+        # applied last, after every other override above (same ordering
+        # flyscan_3idc.flyscan enforces, for the same reason).
+        eiger2.hdf1.stage_sigs.move_to_end("capture")
+
+        dropped_baseline = _safe_get(eiger2.hdf1, "dropped_arrays", use_monitor=False)
+
+        @bpp.stage_decorator([eiger2])
+        @bpp.monitor_during_decorator(
+            [eiger2.hdf1.num_captured, eiger2.cam.array_counter]
+        )
+        @bpp.run_decorator(md=_md)
+        def _acquire():
+            logger.info(
+                "fixed_count_acquire: staged; starting acquisition"
+                " (%d frames @ %gs/frame, hdf_num_capture=%d upper bound,"
+                " drain_timeout=%gs)",
+                num_images,
+                acquire_time,
+                hdf_num_capture,
+                drain_timeout,
+            )
+            t0 = time.time()
+            # Multiple-mode with a finite num_images: the cam stops
+            # itself once num_images frames are taken, but Acquire_RBV
+            # can lag that (see the Eiger stop gotcha, bluesky skill
+            # memory) -- fire-and-forget and rely on
+            # wait_for_acquire_drained's acquire_busy/queue check below,
+            # same as every cam.acquire set in flyscan_3idc.py.
+            yield from bps.abs_set(eiger2.cam.acquire, 1)
+            yield from wait_for_acquire_drained(eiger2, poll=0.1, timeout=drain_timeout)
+            elapsed = time.time() - t0
+            n_captured = _safe_get(eiger2.hdf1, "num_captured", use_monitor=False) or 0
+            rate = n_captured / elapsed if elapsed > 0 else float("nan")
+            logger.info(
+                "fixed_count_acquire: drained after %.1fs"
+                " (num_captured=%d/%d, %.2f fps overall)",
+                elapsed,
+                n_captured,
+                num_images,
+                rate,
+            )
+            if n_captured < num_images:
+                logger.warning(
+                    "fixed_count_acquire: only %d/%d frames captured"
+                    " within drain_timeout=%gs -- rerun with a larger"
+                    " drain_timeout or check the IOC/network path",
+                    n_captured,
+                    num_images,
+                    drain_timeout,
+                )
+            dropped_now = _safe_get(eiger2.hdf1, "dropped_arrays", use_monitor=False)
+            if (
+                dropped_baseline is not None
+                and dropped_now is not None
+                and int(dropped_now) - int(dropped_baseline) > 0
+            ):
+                logger.warning(
+                    "fixed_count_acquire: HDF plugin dropped %d frame(s)"
+                    " during this run (hdf1.dropped_arrays: %s -> %s)",
+                    int(dropped_now) - int(dropped_baseline),
+                    dropped_baseline,
+                    dropped_now,
+                )
+
+            print(
+                f"fixed_count_acquire: {n_captured}/{num_images} frames in"
+                f" {elapsed:.1f}s ({rate:.2f} fps overall) -> "
+                f"{eiger2.hdf1.full_file_name.get(use_monitor=False, as_string=True)}"
+            )
+
+        yield from _acquire()
+    finally:
+        # stage_sigs dict contents don't un-mutate on their own (unlike
+        # device *values*, which bps.unstage -- fired automatically by
+        # bpp.stage_decorator above -- already restores).
+        restore_stage_sigs(saved_stage_sigs)
+        # Put file_name/file_path/file_template/file_number/auto_save/
+        # auto_increment/compression/create_directory back to whatever
+        # they were before this plan ran (the CacheParameters overrides
+        # above, mirroring flyscan_3idc.flyscan's own original_cache).
+        yield from original_cache.restore()
