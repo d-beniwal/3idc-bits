@@ -55,6 +55,8 @@ from id3c.plans.flyscan_3idc import check_hdf_file_path
 from id3c.plans.flyscan_3idc import restore_stage_sigs
 from id3c.plans.flyscan_3idc import snapshot_stage_sigs
 from id3c.plans.flyscan_3idc import wait_for_acquire_drained
+from id3c.user.s3idc_plans.setup_june_26 import _decimal_places
+from id3c.user.s3idc_plans.setup_june_26 import _fmt_pos
 
 logger = logging.getLogger(__name__)
 
@@ -578,4 +580,278 @@ def fixed_count_acquire(
         # auto_increment/compression/create_directory back to whatever
         # they were before this plan ran (the CacheParameters overrides
         # above, mirroring flyscan_3idc.flyscan's own original_cache).
+        yield from original_cache.restore()
+
+
+@plan
+def rel_fixed_exp_sam_grid(
+    x_half_range: float = 0.05,
+    x_step: float = 0.005,
+    y_half_range: float = 0.05,
+    y_step: float = 0.005,
+    exposure_time: float = 1.0,
+    file_name: str = "samGrid",
+    file_path: str = "/home/sector3/s3ida/XRD/2026-2/setup/June17/",
+    compression: str = "zlib",
+    open_shutter: bool = True,
+    md: dict = None,
+):
+    """Step-and-shoot 2D grid over the sample, centered on the CURRENT position.
+
+    Moves ``sample_stage.xprime`` (X) and ``sample_stage.base_y`` (Y)
+    through every point of a rectangular grid built from
+    ``+-x_half_range``/``+-y_half_range`` around wherever the motors
+    ACTUALLY ARE right now when this plan starts (read once, at call time
+    -- like ``bp.rel_grid_scan``, not a fixed absolute range), stopping
+    fully at each point for one ``exposure_time``-second single-frame
+    exposure. Row-major traversal: every row sweeps X low -> high in the
+    same direction (no serpentine); Y advances low -> high between rows
+    (matches ``omega_fly_at_sam_steps``'s convention, not
+    ``sweep_xy_integrate_steps``'s snake pattern -- that plan is a
+    continuous time-sampled raster, not a discrete step scan, and does not
+    fit this use case).
+
+    Properly staged (see this module's docstring): every signal this plan
+    changes on ``eiger2.cam``/``hdf1``/plugins goes through ``stage_sigs``
+    + ``bps.stage(eiger2)`` (via ``bpp.stage_decorator``), so
+    ``RE(bps.unstage(...))`` is NOT needed afterward -- the decorator
+    restores everything automatically, including on error/Ctrl-C.
+
+    One Bluesky **run** covers the whole grid (not one run per point): the
+    ``primary`` stream gets one event per point (actual X/Y readback and
+    that point's HDF5 file name), same structure as
+    ``fixed_exp_at_det_steps``. Each point writes its **own** one-frame
+    HDF5 file (``hdf1.num_capture = 1``, exactly matching the one frame
+    actually taken -- deliberately NOT an inflated upper bound, so there
+    is no post-stop drain/finalization holdup; see the bluesky skill's
+    project memory, "CORRECTION: post-stop HDF holdup is NOT a
+    write-throughput backlog", 2026-10-10), named
+    ``<file_name>_<x>_<y>_NNNNNN`` where ``<x>``/``<y>`` are the commanded
+    grid coordinates (decimal point written as ``p``) and ``NNNNNN`` is
+    the IOC's running file-number counter (NOT reset per point --
+    uniqueness already comes from the position tokens, same convention
+    ``fixed_exp_at_det_steps`` uses).
+
+    Parameters
+    ----------
+    x_half_range : float [mm]
+        X half-range :: Grid spans current samX +/- this value.
+    x_step : float [mm]
+        X step :: Spacing between X columns; half-range should be a whole
+        multiple of this for a symmetric grid (0.05/0.005 -> 21 columns).
+    y_half_range : float [mm]
+        Y half-range :: Grid spans current samY +/- this value.
+    y_step : float [mm]
+        Y step :: Spacing between Y rows; half-range should be a whole
+        multiple of this for a symmetric grid.
+    exposure_time : float [s]
+        Exposure time :: Per-point exposure (cam.acquire_time/acquire_period).
+    file_name : str
+        File name :: Output HDF5 base name; a _<x>_<y> position suffix is
+        appended per point.
+    file_path : str
+        File path :: IOC-side directory the HDF5 files are written to.
+    compression : str
+        HDF5 compression :: hdf1.compression; must match one of
+        eiger2.hdf1.compression.enum_strs if the IOC is reachable.
+    open_shutter : bool
+        Open shutter :: Open shutterc for the whole grid, then close it
+        (always, even on error).
+
+    Example::
+
+        # +-50 um in X and Y about wherever the sample is right now,
+        # 5 um steps, 1 s exposure/point (21x21 = 441 points)
+        RE(rel_fixed_exp_sam_grid(0.05, 0.005, 0.05, 0.005, exposure_time=1.0))
+    """
+    if x_half_range <= 0 or y_half_range <= 0:
+        raise ValueError("x_half_range and y_half_range must be > 0")
+    if x_step <= 0 or y_step <= 0:
+        raise ValueError("x_step and y_step must be > 0")
+    if exposure_time <= 0:
+        raise ValueError("exposure_time must be > 0")
+
+    eiger2 = oregistry["eiger2"]
+    sample_stage = oregistry["sample_stage"]
+    xm = sample_stage.xprime
+    ym = sample_stage.base_y
+
+    # Same compression validation fixed_count_acquire/flyscan_3idc.
+    # validate_flyscan_inputs do against the HDF plugin's enum_strs.
+    try:
+        enum_strs = tuple(getattr(eiger2.hdf1.compression, "enum_strs", ()) or ())
+    except Exception as exc:
+        logger.debug(
+            "rel_fixed_exp_sam_grid: cannot read compression enum_strs: %r", exc
+        )
+        enum_strs = ()
+    if enum_strs and compression not in enum_strs:
+        raise ValueError(
+            f"compression={compression!r} not in HDF plugin's allowed set"
+            f" {list(enum_strs)!r}."
+        )
+
+    # Grid centered on the CURRENT position, read once at call time (like
+    # bp.rel_grid_scan) -- not a fixed absolute range.
+    x0 = yield from bps.rd(xm)
+    y0 = yield from bps.rd(ym)
+
+    n_x = max(1, 2 * round(x_half_range / x_step) + 1)
+    n_y = max(1, 2 * round(y_half_range / y_step) + 1)
+    dx = (2 * x_half_range) / (n_x - 1) if n_x > 1 else 0.0
+    dy = (2 * y_half_range) / (n_y - 1) if n_y > 1 else 0.0
+    x_cols = [x0 - x_half_range + i * dx for i in range(n_x)]
+    y_rows = [y0 - y_half_range + i * dy for i in range(n_y)]
+    n_points = n_x * n_y
+
+    decimals = max(_decimal_places(x_step), _decimal_places(y_step))
+
+    print(
+        f"rel_fixed_exp_sam_grid: {n_x}x{n_y}={n_points} points around "
+        f"(x0={x0:g}, y0={y0:g}): X[{x_cols[0]:g},{x_cols[-1]:g}] x "
+        f"Y[{y_rows[0]:g},{y_rows[-1]:g}], {exposure_time:g}s/point, "
+        f"one HDF5 file/point -> {file_name}"
+    )
+
+    run_md = dict(md or {})
+    run_md.setdefault("plan_name", "rel_fixed_exp_sam_grid")
+    run_md.update(
+        {
+            "samX_center": x0,
+            "samY_center": y0,
+            "x_half_range": x_half_range,
+            "x_step": x_step,
+            "y_half_range": y_half_range,
+            "y_step": y_step,
+            "exposure_time": exposure_time,
+            "n_points": n_points,
+        }
+    )
+
+    # file_name/file_path/file_template/auto_save/auto_increment/
+    # compression/create_directory are "caller is responsible for setting"
+    # fields (apstools.devices.AD_EpicsFileNameMixin._remove_caller_stage_sigs)
+    # -- set once via CacheParameters, reused from flyscan_3idc exactly like
+    # fixed_count_acquire does. The per-point file_name below is a live
+    # bps.mv, not tracked here, so restore() still puts back the ORIGINAL
+    # pre-scan name, not the last point's.
+    original_cache = CacheParameters()
+    yield from original_cache.override(eiger2.hdf1.create_directory, -5)
+    for obj, value in [
+        (eiger2.hdf1.auto_increment, "Yes"),
+        (eiger2.hdf1.auto_save, "Yes"),
+        (eiger2.hdf1.compression, compression),
+        (eiger2.hdf1.file_name, file_name),
+        (eiger2.hdf1.file_path, file_path),
+        (eiger2.hdf1.file_template, "%s%s_%6.6d.h5"),
+    ]:
+        yield from original_cache.override(obj, value)
+    check_hdf_file_path(eiger2)
+
+    plugins = [
+        getattr(eiger2, nm)
+        for nm in eiger2.component_names
+        if hasattr(getattr(eiger2, nm), "blocking_callbacks")
+    ]
+    saved_stage_sigs = snapshot_stage_sigs(eiger2, eiger2.cam, eiger2.hdf1, *plugins)
+
+    try:
+        eiger2.cam.stage_sigs["image_mode"] = "Single"
+        eiger2.cam.stage_sigs["num_images"] = 1
+        eiger2.cam.stage_sigs["acquire_time"] = exposure_time
+        eiger2.cam.stage_sigs["acquire_period"] = exposure_time
+        eiger2.cam.stage_sigs["array_callbacks"] = 1
+        if hasattr(eiger2.cam, "wait_for_plugins"):
+            eiger2.cam.stage_sigs["wait_for_plugins"] = "Yes"
+
+        eiger2.hdf1.stage_sigs["file_write_mode"] = "Capture"
+        # Exactly 1 -- matches the one frame actually taken per point, so
+        # there is never a num_capture-vs-actual gap to reconcile on close.
+        eiger2.hdf1.stage_sigs["num_capture"] = 1
+        for plugin in plugins:
+            plugin.stage_sigs["blocking_callbacks"] = (
+                "Yes" if plugin is eiger2.hdf1 else "No"
+            )
+        eiger2.hdf1.stage_sigs.move_to_end("capture")
+
+        if open_shutter:
+            yield from bps.mv(oregistry["shutterc"], "open")
+
+        @bpp.stage_decorator([eiger2])
+        @bpp.run_decorator(md=run_md)
+        def _grid():
+            index = 0
+            for yval in y_rows:
+                for xval in x_cols:
+                    index += 1
+                    yield from bps.mv(xm, xval, ym, yval)
+                    rx = yield from bps.rd(xm)
+                    ry = yield from bps.rd(ym)
+
+                    fname = (
+                        f"{file_name}_{_fmt_pos(xval, decimals)}"
+                        f"_{_fmt_pos(yval, decimals)}"
+                    )
+                    yield from bps.mv(eiger2.hdf1.file_name, fname)
+
+                    # arm (resets num_captured -> 0, opens this point's file)
+                    yield from bps.mv(eiger2.hdf1.capture, 1)
+                    # fire-and-forget: Acquire_RBV can lag the real state
+                    # (Eiger stop gotcha, bluesky skill memory)
+                    yield from bps.abs_set(eiger2.cam.acquire, 1)
+                    # wait for the positive edge, NOT acquire_busy==0 (reads
+                    # 0 both before and after -- would abort the frame
+                    # instantly)
+                    captured_status = SubscriptionStatus(
+                        eiger2.hdf1.num_captured,
+                        lambda *, value, **_: int(value) >= 1,
+                        run=True,
+                        timeout=exposure_time + 30.0,
+                    )
+                    while not captured_status.done:
+                        yield from bps.sleep(0.05)
+
+                    yield from bps.abs_set(eiger2.cam.acquire, 0)
+                    yield from wait_for_acquire_drained(
+                        eiger2, poll=0.05, timeout=exposure_time + 30.0
+                    )
+                    # Capture mode: Capture=0 + auto_save alone does not
+                    # reliably flush an early/explicit stop (empty-HDF5-file
+                    # bug, bluesky skill memory) -- explicit write_file=1,
+                    # poll back to 0.
+                    yield from bps.mv(eiger2.hdf1.capture, 0)
+                    n_captured = int(
+                        eiger2.hdf1.num_captured.get(use_monitor=False) or 0
+                    )
+                    if n_captured > 0 and hasattr(eiger2.hdf1, "write_file"):
+                        yield from bps.abs_set(eiger2.hdf1.write_file, 1)
+                        flush_status = SubscriptionStatus(
+                            eiger2.hdf1.write_file,
+                            lambda *, value, **_: int(value) == 0,
+                            run=True,
+                            timeout=exposure_time + 30.0,
+                        )
+                        while not flush_status.done:
+                            yield from bps.sleep(0.05)
+
+                    yield from bps.create("primary")
+                    yield from bps.read(xm)
+                    yield from bps.read(ym)
+                    yield from bps.read(eiger2.hdf1.full_file_name)
+                    yield from bps.save()
+
+                    print(
+                        f"rel_fixed_exp_sam_grid: [{index}/{n_points}] "
+                        f"samX={xval:g} (actual {rx:g}), "
+                        f"samY={yval:g} (actual {ry:g}) -> {fname}"
+                    )
+
+        yield from _grid()
+    finally:
+        if open_shutter:
+            try:
+                yield from bps.mv(oregistry["shutterc"], "close")
+            except Exception as exc:  # noqa: BLE001
+                print(f"rel_fixed_exp_sam_grid: failed to close shutter: {exc!r}")
+        restore_stage_sigs(saved_stage_sigs)
         yield from original_cache.restore()
