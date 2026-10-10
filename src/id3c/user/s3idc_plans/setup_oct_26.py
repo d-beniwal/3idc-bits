@@ -47,6 +47,7 @@ from apsbits.core.instrument_init import oregistry
 from bluesky import plan_stubs as bps  # noqa: F401
 from bluesky import preprocessors as bpp
 from bluesky.utils import plan
+from ophyd.status import SubscriptionStatus
 
 from id3c.plans.flyscan_3idc import CacheParameters
 from id3c.plans.flyscan_3idc import _safe_get
@@ -184,21 +185,37 @@ def fixed_count_acquire(
 
     * ``cam.image_mode = "Multiple"``, ``cam.num_images = num_images`` --
       a real, finite count (unlike flyscan's geometry-driven, open-ended
-      acquisition), so the cam stops itself once ``num_images`` frames
-      are taken.
+      acquisition). **Not trusted to self-stop at exactly
+      ``num_images``:** ``flyscan_3idc.flyscan`` deliberately never
+      relies on frame-count-based auto-stop on this Eiger/IOC
+      combination -- it always runs in ``Continuous`` mode and stops the
+      cam itself via explicit boundary-detection logic (see the comment
+      on ``det.cam.stage_sigs["num_images"] = effective_num_images(...)``
+      in ``flyscan_3idc.py``). Confirmed on real hardware 2026-10-10:
+      an earlier version of this plan trusted ``Multiple``-mode auto-stop
+      and the cam overran well past ``num_images`` (~700 frames captured
+      for a 500-frame request). This plan now actively stops the cam
+      itself once ``hdf1.num_captured`` reaches ``num_images`` (see
+      below) instead of trusting the cam to do it.
     * ``cam.wait_for_plugins = "Yes"`` so ``cam.acquire_busy`` only drops
       to 0 once every plugin (including ``hdf1``) has finished processing
       the last frame -- the same signal ``flyscan_3idc.flyscan`` uses to
-      decide the scan is actually done.
+      decide the scan is actually done, and the signal this plan polls
+      after issuing its own explicit stop.
     * ``hdf1.file_write_mode = "Stream"`` -- flyscan never overrides this,
       so a real flyscan run writes in Stream mode too (frames land on
       disk incrementally, as they're captured, rather than being
       buffered and flushed in one shot at ``Capture=0``); set explicitly
-      here so the match to flyscan is documented, not incidental. Still
-      paired with the same oversized upper-bound ``num_capture`` sizing
-      flyscan uses (``int(num_images * 1.5) + 20`` -- this bound applies
-      in Stream mode too, it is not a "Capture"-only setting), and the
-      same ``hdf1.blocking_callbacks = "Yes"`` / every other plugin's
+      here so the match to flyscan is documented, not incidental.
+      ``hdf1.num_capture`` is set to **exactly** ``num_images`` -- unlike
+      flyscan's inflated ``int(expected_frames * 1.5) + 20`` upper bound
+      (needed there because the real frame count is unknown ahead of
+      time), this plan's count *is* known exactly, so ``num_capture``
+      doubles as an independent safety net: AreaDetector's Stream-mode
+      HDF plugin auto-sets ``Capture=0`` once ``num_captured ==
+      num_capture``, capping the written file at ``num_images`` even if
+      the cam itself does not stop cleanly. Paired with the same
+      ``hdf1.blocking_callbacks = "Yes"`` / every other plugin's
       ``blocking_callbacks = "No"`` throughput-throttling convention (no
       dropped frames; the cam self-paces to the HDF write rate). Which
       plugins count as "every other plugin" is discovered the same way
@@ -294,9 +311,11 @@ def fixed_count_acquire(
         idea from that same analysis.
     drain_timeout : float [s]
         Max drain wait :: Longest time to wait for the HDF plugin to
-        finish writing after acquisition stops; blank sizes it from
-        ``num_images`` (generous: measured flyscan drain rates have been
-        as low as ~3.6 fps).
+        finish writing after this plan explicitly stops the cam; blank
+        sizes it from ``num_images`` (generous: measured flyscan drain
+        rates have been as low as ~3.6 fps). Also used as a floor for
+        the internal timeout on reaching ``num_images`` captured frames
+        in the first place.
 
     Example::
 
@@ -334,7 +353,13 @@ def fixed_count_acquire(
             f" {list(enum_strs)!r}."
         )
 
-    hdf_num_capture = int(num_images * 1.5) + 20
+    # Exact, not flyscan's inflated upper bound: the count here is known
+    # ahead of time (it's the caller's own parameter), so num_capture
+    # doubles as an independent safety net -- the HDF plugin's own
+    # Stream-mode auto-stop (Capture -> 0 once num_captured ==
+    # num_capture) caps the written file at num_images even if the cam
+    # itself does not stop cleanly (see cam.image_mode docstring note).
+    hdf_num_capture = num_images
     if drain_timeout is None:
         # Generous: measured flyscan drain rates have been as low as
         # ~3.6 fps (bluesky skill memory, 2026-10-08 entry) -- size for
@@ -441,7 +466,7 @@ def fixed_count_acquire(
         def _acquire():
             logger.info(
                 "fixed_count_acquire: staged; starting acquisition"
-                " (%d frames @ %gs/frame, hdf_num_capture=%d upper bound,"
+                " (%d frames @ %gs/frame, hdf_num_capture=%d exact,"
                 " drain_timeout=%gs)",
                 num_images,
                 acquire_time,
@@ -449,33 +474,79 @@ def fixed_count_acquire(
                 drain_timeout,
             )
             t0 = time.time()
-            # Multiple-mode with a finite num_images: the cam stops
-            # itself once num_images frames are taken, but Acquire_RBV
-            # can lag that (see the Eiger stop gotcha, bluesky skill
-            # memory) -- fire-and-forget and rely on
-            # wait_for_acquire_drained's acquire_busy/queue check below,
-            # same as every cam.acquire set in flyscan_3idc.py.
+            # Fire-and-forget: Acquire_RBV can lag the real state (Eiger
+            # stop gotcha, bluesky skill memory) -- never wait on it.
             yield from bps.abs_set(eiger2.cam.acquire, 1)
+
+            # Actively wait for exactly num_images frames rather than
+            # trusting cam.image_mode="Multiple" to self-stop there --
+            # flyscan_3idc.flyscan never relies on frame-count-based
+            # auto-stop on this Eiger/IOC (it always uses Continuous mode
+            # + explicit boundary-detection stop instead; see this
+            # plan's docstring). hdf1.num_captured is the
+            # downstream-of-everything signal (cam produced the frame
+            # AND hdf1 accepted it), same signal
+            # takeoff_and_monitor's first_frame_status uses in
+            # flyscan_3idc.py.
+            capture_timeout = max(drain_timeout, 2.0 * acquire_time * num_images + 30.0)
+            count_reached_status = SubscriptionStatus(
+                eiger2.hdf1.num_captured,
+                lambda *, value, **_: int(value) >= num_images,
+                run=True,
+                timeout=capture_timeout,
+            )
+            while not count_reached_status.done:
+                yield from bps.sleep(0.1)
+            t_captured = time.time()
+            capture_elapsed = t_captured - t0
+            if not count_reached_status.success:
+                logger.warning(
+                    "fixed_count_acquire: only %d/%d frames captured"
+                    " within capture_timeout=%gs -- stopping the cam"
+                    " anyway and reporting what was captured",
+                    int(eiger2.hdf1.num_captured.get(use_monitor=False) or 0),
+                    num_images,
+                    capture_timeout,
+                )
+
+            # Explicit Eiger-safe stop (same sequence flyscan_3idc.py
+            # uses everywhere it stops this cam): fire non-blocking,
+            # then confirm idle via wait_for_acquire_drained's
+            # acquire_busy/HDF-queue check -- NOT Acquire_RBV, which can
+            # stay at 1 for seconds after Acquire=0 is written.
+            yield from bps.abs_set(eiger2.cam.acquire, 0)
             yield from wait_for_acquire_drained(eiger2, poll=0.1, timeout=drain_timeout)
             elapsed = time.time() - t0
+            drain_elapsed = time.time() - t_captured
             n_captured = _safe_get(eiger2.hdf1, "num_captured", use_monitor=False) or 0
             rate = n_captured / elapsed if elapsed > 0 else float("nan")
             logger.info(
-                "fixed_count_acquire: drained after %.1fs"
-                " (num_captured=%d/%d, %.2f fps overall)",
-                elapsed,
+                "fixed_count_acquire: captured %d/%d frames in %.1fs,"
+                " then drained after %.1fs more (%.1fs total, %.2f fps"
+                " overall)",
                 n_captured,
                 num_images,
+                capture_elapsed,
+                drain_elapsed,
+                elapsed,
                 rate,
             )
-            if n_captured < num_images:
+            if n_captured > num_images:
                 logger.warning(
-                    "fixed_count_acquire: only %d/%d frames captured"
-                    " within drain_timeout=%gs -- rerun with a larger"
-                    " drain_timeout or check the IOC/network path",
+                    "fixed_count_acquire: %d frames captured, more than"
+                    " the requested %d -- the HDF plugin's num_capture"
+                    " safety net should have prevented this; check the"
+                    " IOC's Stream-mode auto-stop behavior",
                     n_captured,
                     num_images,
-                    drain_timeout,
+                )
+            elif n_captured < num_images:
+                logger.warning(
+                    "fixed_count_acquire: only %d/%d frames captured"
+                    " -- rerun with a larger capture_timeout or check"
+                    " the IOC/network path",
+                    n_captured,
+                    num_images,
                 )
             dropped_now = _safe_get(eiger2.hdf1, "dropped_arrays", use_monitor=False)
             if (
