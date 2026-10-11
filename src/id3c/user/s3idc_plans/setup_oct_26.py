@@ -41,6 +41,7 @@ grammar spec; not repeated here.
 """
 
 import logging
+import os
 import time
 
 from apsbits.core.instrument_init import oregistry
@@ -56,7 +57,10 @@ from id3c.plans.flyscan_3idc import restore_stage_sigs
 from id3c.plans.flyscan_3idc import snapshot_stage_sigs
 from id3c.plans.flyscan_3idc import wait_for_acquire_drained
 from id3c.user.s3idc_plans.setup_june_26 import _decimal_places
+from id3c.user.s3idc_plans.setup_june_26 import _ensure_detector_idle
 from id3c.user.s3idc_plans.setup_june_26 import _fmt_pos
+from id3c.user.s3idc_plans.setup_june_26 import _record_det_positions_in_hdf
+from id3c.user.s3idc_plans.setup_june_26 import omega_fly
 
 logger = logging.getLogger(__name__)
 
@@ -855,3 +859,296 @@ def rel_fixed_exp_sam_grid(
                 print(f"rel_fixed_exp_sam_grid: failed to close shutter: {exc!r}")
         restore_stage_sigs(saved_stage_sigs)
         yield from original_cache.restore()
+
+
+@plan
+def omega_fly_at_det_sam_steps(
+    positions,
+    x_start: float,
+    x_end: float,
+    n_x: int,
+    y_start: float,
+    y_end: float,
+    n_y: int,
+    file_name: str = "omeFly_sam",
+    file_path: str = "/home/sector3/s3ida/XRD/2026-2/setup/June17/",
+    p_start: float = -5,
+    p_end: float = 5,
+    exposures_per_egu: float = 2,
+    t_period: float = 1.0,
+    t_acquire: float = None,
+    start_index: int = 1,
+    md: dict = None,
+):
+    """Run the whole ``omega_fly_at_sam_steps`` sample grid at EACH detector position.
+
+    Modification of ``setup_june_26.omega_fly_at_sam_steps`` that adds an
+    outer loop over detector ``(det_x, eiger_y, eiger_z)`` positions --
+    same ``positions`` convention as ``setup_june_26.omega_fly_at_det_steps``.
+    For each triple (in order): move ``detector_stage`` to it, then run
+    the ENTIRE samX/samY grid (identical traversal to
+    ``omega_fly_at_sam_steps``: samY rows visited in the given order,
+    samX always low->high within every row) before moving on to the next
+    detector position.
+
+    Output layout. ``file_path`` is the top-level directory; one
+    subfolder is created inside it per detector position, named from the
+    ACTUAL (post-move) detector readbacks rounded to the nearest
+    integer -- the same ``det_<X>_<Y>_<Z>`` convention already used at
+    3-ID-C for multi-detector-position sample grids::
+
+        <file_path>/det_<X>_<Y>_<Z>/<file_name>_<x>_<y>_000001.h5
+
+    The folder is created with a plain ``os.makedirs(..., exist_ok=True)``
+    right after the detector move, before the first ``omega_fly`` call at
+    that position -- this assumes the console has the same filesystem
+    view of ``file_path`` as the IOC, same assumption every other helper
+    in this module relies on when it reads back the HDF5 file it just
+    wrote (e.g. ``_record_det_positions_in_hdf``). Grid-point file names
+    inside each folder are unchanged from ``omega_fly_at_sam_steps``:
+    ``<file_name>_<x>_<y>`` with ``<x>``/``<y>`` the *requested* samX/samY
+    grid coordinates. Each produced HDF5 file is also annotated with the
+    full-precision actual detector position (best-effort, same helper
+    ``omega_fly_at_det_steps`` uses).
+
+    Parameters
+    ----------
+    positions : positions [mm]
+        Detector positions :: One (det_x, eiger_y, eiger_z) triple per
+        line; the full sample grid runs once at each, in order.
+    x_start : float [mm]
+        samX start :: samX (sample_stage.xprime) grid limit; ordered
+        internally so the sweep is always low->high.
+    x_end : float [mm]
+        samX end :: samX (sample_stage.xprime) grid limit; ordered internally
+        so the sweep is always low->high.
+    n_x : int
+        Number of samX columns :: Number of samX grid columns (>= 1).
+    y_start : float [mm]
+        samY start :: samY (sample_stage.base_y) grid limit; rows are visited
+        in the order given (y_start -> y_end).
+    y_end : float [mm]
+        samY end :: samY (sample_stage.base_y) grid limit; rows are visited in
+        the order given (y_start -> y_end).
+    n_y : int
+        Number of samY rows :: Number of samY grid rows (>= 1).
+    file_name : str
+        File name :: Output HDF5 base name; a _<x>_<y> position suffix is
+        appended per sample-grid point.
+    file_path : str
+        File path :: IOC-side top-level directory; one subfolder per
+        detector position is created inside it.
+    p_start : float [deg]
+        omega start :: Omega angle at which each rotation begins.
+    p_end : float [deg]
+        omega end :: Omega angle at which each rotation ends.
+    exposures_per_egu : float [1/deg]
+        Exposures per degree :: Frames acquired per degree of omega travel.
+    t_period : float [s]
+        Frame period :: Time between successive frames.
+    t_acquire : float [s]
+        Exposure per frame :: Per-frame exposure (<= frame period); blank uses
+        the frame period.
+    start_index : int
+        Start index :: First value of the per-point series index recorded
+        in metadata; counts every sample-grid point at every detector
+        position, in run order (NOT reset per detector position).
+
+    Note
+    ----
+    Each ``omega_fly`` retracts ``laser_optics`` (the omega interlock)
+    and opens its own Bluesky run + HDF5 file, exactly as a standalone
+    ``omega_fly`` would. The detector is forced idle once the whole
+    series finishes -- or is aborted partway through -- best-effort,
+    same as ``omega_fly_at_det_steps``/``omega_fly_at_sam_steps``.
+
+    Example::
+
+        # 2 detector positions x (3x2=6 sample points each) = 12 flyscans,
+        # one subfolder per detector position under file_path
+        RE(omega_fly_at_det_sam_steps(
+            [(100, 0, 50), (150, 0, 50)],
+            -1, 1, 3, 0, 0.5, 2,
+        ))
+    """
+    if n_x < 1 or n_y < 1:
+        raise ValueError("n_x and n_y must both be >= 1")
+
+    positions = list(positions)
+    if not positions:
+        raise ValueError(
+            "positions must contain at least one (det_x, eiger_y, eiger_z) triple"
+        )
+
+    detector_stage = oregistry["detector_stage"]
+    for axis in ("det_x", "eiger_y", "eiger_z"):
+        if not hasattr(detector_stage, axis):
+            raise ValueError(
+                f"detector_stage has no axis {axis!r}; expected "
+                "'det_x', 'eiger_y', 'eiger_z'."
+            )
+    x_det_motor = detector_stage.det_x
+    y_det_motor = detector_stage.eiger_y
+    z_det_motor = detector_stage.eiger_z
+
+    sample_stage = oregistry["sample_stage"]
+    eiger2 = oregistry["eiger2"]
+    xm = sample_stage.xprime
+    ym = sample_stage.base_y
+
+    # Sample grid: identical construction to omega_fly_at_sam_steps.
+    x_lo, x_hi = sorted((x_start, x_end))
+    dx = None
+    if n_x == 1:
+        x_cols = [x_lo]
+    else:
+        dx = (x_hi - x_lo) / (n_x - 1)
+        x_cols = [x_lo + i * dx for i in range(n_x)]
+
+    dy = None
+    if n_y == 1:
+        y_rows = [y_start]
+    else:
+        dy = (y_end - y_start) / (n_y - 1)
+        y_rows = [y_start + i * dy for i in range(n_y)]
+
+    decimals = max(
+        _decimal_places(x_start),
+        _decimal_places(x_end),
+        _decimal_places(y_start),
+        _decimal_places(y_end),
+    )
+    if dx is not None:
+        decimals = max(decimals, _decimal_places(dx))
+    if dy is not None:
+        decimals = max(decimals, _decimal_places(dy))
+
+    n_grid_points = n_x * n_y
+    n_total = len(positions) * n_grid_points
+    # file_template ("%s%s_%6.6d.h5") concatenates file_path + file_name
+    # with no separator of its own, so file_path (and every per-position
+    # subfolder built from it) MUST end in "/" -- same requirement every
+    # other plan in this module relies on.
+    base_path = file_path if file_path.endswith(("/", "\\")) else file_path + "/"
+
+    print(
+        f"omega_fly_at_det_sam_steps: {len(positions)} detector position(s) x "
+        f"{n_x}x{n_y}={n_grid_points} sample points = {n_total} flyscans total "
+        f"(samX {x_lo:g}->{x_hi:g} ascending every row, samY {y_start:g}->"
+        f"{y_end:g}); omega flyscan {p_start:g}->{p_end:g} deg at each -> "
+        f"{base_path}<det folder>/{file_name}"
+    )
+
+    def _series():
+        offset = 0
+        for det_offset, pos in enumerate(positions):
+            try:
+                det_x, eiger_y, eiger_z = pos
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"positions[{det_offset}]={pos!r} is not a "
+                    "(det_x, eiger_y, eiger_z) triple."
+                ) from None
+
+            # 1. move all three detector axes together (blocking)
+            yield from bps.mv(
+                x_det_motor, det_x, y_det_motor, eiger_y, z_det_motor, eiger_z
+            )
+            rdx = yield from bps.rd(x_det_motor)
+            rdy = yield from bps.rd(y_det_motor)
+            rdz = yield from bps.rd(z_det_motor)
+
+            # 2. one subfolder per detector position, named from the
+            #    ACTUAL readback rounded to the nearest integer (matches
+            #    the det_<X>_<Y>_<Z> convention already used at 3-ID-C).
+            det_folder = f"det_{round(rdx)}_{round(rdy)}_{round(rdz)}"
+            det_file_path = f"{base_path}{det_folder}/"
+            try:
+                os.makedirs(det_file_path, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    "omega_fly_at_det_sam_steps: could not create"
+                    f" detector-position folder {det_file_path!r}: {exc!r}"
+                ) from exc
+
+            print(
+                f"omega_fly_at_det_sam_steps: detector position "
+                f"[{det_offset + 1}/{len(positions)}] requested "
+                f"det_x={det_x}, eiger_y={eiger_y}, eiger_z={eiger_z}; "
+                f"actual=({rdx:g}, {rdy:g}, {rdz:g}) -> {det_file_path}"
+            )
+
+            # 3. full sample grid at this detector position -- identical
+            #    traversal/naming to omega_fly_at_sam_steps, writing into
+            #    this detector position's own folder.
+            for yval in y_rows:
+                for xval in x_cols:  # always x_lo -> x_hi
+                    index = start_index + offset
+                    offset += 1
+
+                    yield from bps.mv(xm, xval, ym, yval)
+                    rx = yield from bps.rd(xm)
+                    ry = yield from bps.rd(ym)
+
+                    x_tok = _fmt_pos(xval, decimals)
+                    y_tok = _fmt_pos(yval, decimals)
+                    fname = f"{file_name}_{x_tok}_{y_tok}"
+                    print(
+                        f"omega_fly_at_det_sam_steps: [{offset}/{n_total}] "
+                        f"det_pos={det_folder} samX={xval:g}, samY={yval:g} "
+                        f"(actual {rx:g}, {ry:g}) -> {fname}"
+                    )
+
+                    run_md = dict(md or {})
+                    run_md.update(
+                        {
+                            "series_index": index,
+                            "det_position_index": det_offset + 1,
+                            "det_x_position_requested": det_x,
+                            "eiger_y_position_requested": eiger_y,
+                            "eiger_z_position_requested": eiger_z,
+                            "det_x_position_actual": rdx,
+                            "eiger_y_position_actual": rdy,
+                            "eiger_z_position_actual": rdz,
+                            "samX_position_requested": xval,
+                            "samY_position_requested": yval,
+                            "samX_position_actual": rx,
+                            "samY_position_actual": ry,
+                        }
+                    )
+
+                    # 4. omega flyscan at this (detector, sample) point,
+                    #    writing into this detector position's subfolder.
+                    yield from omega_fly(
+                        file_name=fname,
+                        file_path=det_file_path,
+                        p_start=p_start,
+                        p_end=p_end,
+                        exposures_per_egu=exposures_per_egu,
+                        t_period=t_period,
+                        t_acquire=t_acquire,
+                        md=run_md,
+                    )
+
+                    # 5. annotate the just-written HDF5 file with the
+                    #    detector position (full precision). Best-effort;
+                    #    never fatal (same helper omega_fly_at_det_steps
+                    #    uses, called once per produced file here too).
+                    _record_det_positions_in_hdf(
+                        eiger2,
+                        {"det_x": rdx, "eiger_y": rdy, "eiger_z": rdz},
+                        requested={
+                            "det_x": det_x,
+                            "eiger_y": eiger_y,
+                            "eiger_z": eiger_z,
+                        },
+                    )
+
+    def _close():
+        # Safety net: each omega_fly -> flyscan already closes the
+        # detector in its own cleanup. This guarantees the cam + HDF
+        # plugin are left idle once the whole series ends -- or is
+        # aborted partway through.
+        yield from _ensure_detector_idle(eiger2)
+
+    yield from bpp.finalize_wrapper(_series(), _close())
