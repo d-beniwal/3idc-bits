@@ -7,6 +7,26 @@ expected to apply to all subsequent work unless explicitly overridden.
 Human-facing developer guidance lives in `docs/source/contributing.md`
 (which links back here for the conventions themselves).
 
+## Project context (`.context/`)
+
+At the start of a task, read `.context/STATE.md` for the current focus, next
+steps, blockers, and recent changes. Read `.context/DECISIONS.md` (newest
+first), `.context/ARCHITECTURE.md`, `.context/DOMAIN.md`, and
+`.context/WORKFLOW.md` only when the task actually needs that background —
+do not bulk-read them.
+
+After significant work (a milestone/feature finished, a design decision
+made, a bug root-caused, or a plan/approach changed), update
+`.context/STATE.md` and prepend a dated entry with the decision and *why* to
+`.context/DECISIONS.md`. Keep `STATE.md` concise (under ~1 page) and never
+overwrite prior `DECISIONS.md` entries.
+
+`.context/` is git-ignored and kept LOCAL only (never committed, so it never
+enters feature branches or upstream PRs to `BCDA-APS`) — copy it by hand to
+move workstations. This file (`AGENTS.md`) is the one piece of agent context
+that IS committed, since it holds conventions meant to be shared. There is
+no separate `CLAUDE.md` pointer file — agents read this file directly.
+
 ## What this repo is
 
 A [Bluesky Instrument (BITS)](https://github.com/BCDA-APS/BITS) package
