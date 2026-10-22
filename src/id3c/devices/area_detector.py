@@ -1,11 +1,12 @@
 """
-EPICS area_detector definitions for ID8.
+EPICS area_detector cam definitions for 3-ID-C (and 8-ID-I, where noted).
 """
 
 from apstools.devices import CamMixin_V34
 from ophyd import ADComponent
 from ophyd import EpicsSignal
 from ophyd.areadetector import EigerDetectorCam
+from ophyd.areadetector import PointGreyDetectorCam
 
 
 class EigerDetectorCam_V34(CamMixin_V34, EigerDetectorCam):
@@ -24,3 +25,12 @@ class EigerDetectorCam_V34(CamMixin_V34, EigerDetectorCam):
     link_3 = None
     dcu_buff_free = None
     offset = None
+
+
+class PointGreyDetectorCam_V34(CamMixin_V34, PointGreyDetectorCam):
+    """Revise PointGreyDetectorCam for ADCore revisions.
+
+    Used for the 3-ID-C alignment camera (``3IDPG3:``). ADCore version is
+    assumed 3.4, matching :class:`EigerDetectorCam_V34` above; unverified
+    against the live IOC (see ``.context/OPT_LUCA.md``).
+    """

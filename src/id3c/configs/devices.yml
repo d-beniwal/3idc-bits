@@ -32,6 +32,32 @@ apstools.devices.ad_creator:
       - roi1
       - stats1
 
+  # 3-ID-C alignment camera (Point Grey GigE). Part of the OPT_Luca
+  # workstream porting Luca Rebuffi's KB-mirror optics-alignment
+  # automation to Bluesky -- see .context/OPT_LUCA.md for the full PV
+  # inventory and staging plan.
+  #
+  # tiff1's write_path_template/read_path_template are PLACEHOLDERS
+  # (modeled on eiger2.hdf1's sector3/XRD mount pattern above) -- not yet
+  # confirmed for this camera. This is safe for now:
+  # id3c.user.s3idc_plans.camera_plans.camera_snapshot() sets
+  # tiff1.file_path/file_name directly per acquisition (the caller is
+  # expected to set these -- see AD_EpicsFileNameMixin's docstring) and
+  # never calls stage(), so these templates are never consulted. Update
+  # them (and .context/OPT_LUCA.md's "Open questions") once a real save
+  # location is confirmed and a plan that calls stage() is added.
+  - name: pg3_camera
+    prefix: "3IDPG3:"
+    labels: ["area_detector", "detectors", "cameras"]
+    plugins:
+      - cam:
+          class: id3c.devices.area_detector.PointGreyDetectorCam_V34
+      - pva
+      - tiff1:
+          class: apstools.devices.AD_EpicsFileNameTIFFPlugin
+          write_path_template: "/home/sector3/s3ida/pg3/"
+          read_path_template: "/net/s3data/export/sector3/s3ida/pg3/"
+
 apstools.devices.ApsPssShutter:
 - name: shutterc
   prefix: "3ida:shutterC:"

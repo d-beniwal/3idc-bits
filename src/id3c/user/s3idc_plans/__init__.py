@@ -1,5 +1,7 @@
 """S3IDC commissioning plans (June 2026 beamtime).
 
 See ``setup_june_26`` for the plans developed and tested 15 Jun - 2 Jul 2026
-by Dishant Beniwal, Barbara Lavina and Peter Jemian.
+by Dishant Beniwal, Barbara Lavina and Peter Jemian. ``setup_oct_26`` holds
+the ongoing properly-staged rewrite of those plans. ``camera_plans`` is the
+3-ID-C alignment camera snapshot plan for the OPT_Luca workstream.
 """
