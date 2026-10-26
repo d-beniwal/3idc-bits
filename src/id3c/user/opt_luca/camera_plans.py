@@ -15,7 +15,7 @@ snapshot.
 
 Run through the RunEngine like any other plan::
 
-    from id3c.user.s3idc_plans.camera_plans import camera_snapshot
+    from id3c.user.opt_luca.camera_plans import camera_snapshot
     RE(camera_snapshot(0.1, "/home/sector3/s3ida/pg3/", "align"))
 
 GUI-parseable docstrings: same fixed NumPy ``Parameters`` grammar as

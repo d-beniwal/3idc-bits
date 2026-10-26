@@ -10,7 +10,7 @@ apstools.devices.ad_creator:
   # tiff1's write_path_template/read_path_template are PLACEHOLDERS
   # (modeled on eiger2.hdf1's sector3/XRD mount pattern above) -- not yet
   # confirmed for this camera. This is safe for now:
-  # id3c.user.s3idc_plans.camera_plans.camera_snapshot() sets
+  # id3c.user.opt_luca.camera_plans.camera_snapshot() sets
   # tiff1.file_path/file_name directly per acquisition (the caller is
   # expected to set these -- see AD_EpicsFileNameMixin's docstring) and
   # never calls stage(), so these templates are never consulted. Update
