@@ -113,6 +113,7 @@ if host_on_aps_subnet():
 # Optional, separately-hosted devices (may be offline; session still starts).
 make_devices(clear=False, file="devices_laser_optics.yml", device_manager=instrument)
 make_devices(clear=False, file="devices_eiger.yml", device_manager=instrument)
+make_devices(clear=False, file="devices_camera.yml", device_manager=instrument)
 
 # Install bidirectional Bluesky-session interlock between
 # sample_stage.omega and laser_optics.  See module docstring for scope
