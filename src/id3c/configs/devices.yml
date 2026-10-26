@@ -15,6 +15,7 @@ apstools.devices.ad_creator:
           class: id3c.devices.area_detector.EigerDetectorCam_V34
       - image
       - pva
+      - codec1
       - hdf1:
           class: apstools.devices.AD_EpicsFileNameHDF5Plugin
           write_path_template: "/home/sector3/s3ida/XRD/"
