@@ -2247,7 +2247,7 @@ def flyscan(
     t_period: float = 0.1,
     t_acquire: float = None,
     taxi_allowance: float = 0.5,
-    compression: str = "zlib",
+    compression: str = "BSLZ4",
     ad_file_name: str = "flyscan",
     ad_file_path: str = "/tmp/flyscan",
     velocity_minimum: float = None,
@@ -2255,7 +2255,7 @@ def flyscan(
     hdf_t_phase_offset: float = None,
     # Internal parameters (underscore-prefixed); see Parameters.
     _consumer_tick: float = _CONSUMER_TICK_DEFAULT,
-    _force_hdf_nonblocking: bool = False,
+    _force_hdf_nonblocking: bool = True,
     # User-supplied metadata: always last.
     md: dict = None,
 ):
@@ -2710,7 +2710,7 @@ def flyscan(
     # docs/source/explanation/flyscan_frame_count.md -- keep that page
     # in sync if you change the pre-roll/tail behavior, this
     # over-allocation, or the frame/position pairing.
-    hdf_num_capture = int(num_frames * 1.5) + 20
+    hdf_num_capture = int(num_frames * 1.16) + 20
 
     # Worst-case flush timeout assumes the HDF plugin fills to
     # ``hdf_num_capture``.  Actual flush time at run-end uses the real
