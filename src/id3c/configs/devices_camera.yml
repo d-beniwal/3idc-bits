@@ -22,6 +22,9 @@ apstools.devices.ad_creator:
     plugins:
       - cam:
           class: id3c.devices.area_detector.PointGreyDetectorCam_V34
+      # The IOC chains cam -> OVER1 -> {PVA, TIFF1}; ophyd's validate_asyn_ports
+      # fails ("asyn ports ['OVER1'] ...") unless the overlay plugin is declared.
+      - overlay1
       - pva
       - tiff1:
           class: apstools.devices.AD_EpicsFileNameTIFFPlugin
