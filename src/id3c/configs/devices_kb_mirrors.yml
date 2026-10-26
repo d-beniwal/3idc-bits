@@ -1,0 +1,21 @@
+# Guarneri-style device YAML -- KB mirror motors (own IOCs: 3idc, 3idKB).
+# Separate from devices.yml so an offline IOC does not block core devices.
+#
+# Part of the OPT_Luca workstream (Luca Rebuffi's KB-mirror alignment); PV
+# list from .context/OPT_LUCA.md.  Deliberately NOT labeled "baseline" so
+# these 8 axes are not read at the start/end of every run; add the label once
+# the motors have proven reliable.
+# Not the same axes as sample_stage / detector_stage (3idc:m36/m42/m69/m70).
+apstools.devices.motor_factory.mb_creator:
+- name: kb_mirrors
+  prefix: ""
+  class_name: KBMirrors
+  motors:
+    kbv_us_bender: "3idc:m3"
+    kbv_ds_bender: "3idc:m4"
+    kbv_pitch: "3idKB:m7"
+    kbv_normal: "3idKB:m8"
+    kbh_us_bender: "3idc:m1"
+    kbh_ds_bender: "3idc:m2"
+    kbh_pitch: "3idKB:m3"
+    kbh_normal: "3idKB:m4"
