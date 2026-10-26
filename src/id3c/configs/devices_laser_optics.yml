@@ -1,0 +1,13 @@
+# Guarneri-style device YAML -- laser optics (own IOC).
+# Separate from devices.yml so an offline IOC does not block core devices.
+
+# laser_optics axes are interlocked against sample_stage.omega (both
+# directions).  See setup_omega_laser_interlock in
+# src/id3c/devices/omega_laser_interlock.py (called from
+# src/id3c/startup.py).
+# Position semantics: IN = +75 mm, OUT = -75 mm, tolerance = +/- 1 mm
+# (defaults defined on the LaserOptics class).
+id3c.devices.laser_optics.LaserOptics:
+- name: laser_optics
+  labels: [ "baseline" ]
+  prefix: "3idxps1:"

@@ -1,36 +1,15 @@
 # Guarneri-style device YAML configuration
+#
+# CORE devices only (stages, shutter, scalers, signals, sims).  Devices that
+# depend on a separate, possibly-offline IOC live in their own files so one
+# dead IOC cannot abort this file (guarneri loads a file all-or-nothing):
+#   devices_laser_optics.yml, devices_eiger.yml
+# Load order and failure handling: see src/id3c/startup.py.
 
 # Simulators to demonstrate and test a working installation.
 apsbits.utils.sim_creator.predefined_device:
 - { creator: ophyd.sim.motor, name: sim_motor }
 - { creator: ophyd.sim.noisy_det, name: sim_det }
-
-apstools.devices.ad_creator:
-  # Eiger2 500k
-  - name: eiger2
-    prefix: "dp_eiger_sn:"
-    labels: ["area_detector", "detectors"]
-    plugins:
-      - cam:
-          class: id3c.devices.area_detector.EigerDetectorCam_V34
-      - image
-      - pva
-      - codec1
-      - hdf1:
-          class: apstools.devices.AD_EpicsFileNameHDF5Plugin
-          write_path_template: "/home/sector3/s3ida/XRD/"
-          read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
-      # tiff1 commented out 2026-06-16: its stage() raises
-      # OSError("Path '/' does not exist on IOC.") because the IOC's
-      # TIFF1:FilePath is '/' and we never set it.  The flyscan plan
-      # does not use TIFF.  Re-enable + initialize file_path when
-      # TIFF output is wanted.
-      # - tiff1:
-      #     class: apstools.devices.AD_EpicsFileNameTIFFPlugin
-      #     write_path_template: "/home/sector3/s3ida/XRD/"
-      #     read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
-      - roi1
-      - stats1
 
 apstools.devices.ApsPssShutter:
 - name: shutterc
@@ -66,17 +45,6 @@ apstools.devices.motor_factory.mb_creator:
     det_x: "3idc:m69"  # translation
     eiger_y: "3idc:m70"  # translation Eiger2
     eiger_z: "3idc:m36"  # translation Eiger2
-
-# laser_optics axes are interlocked against sample_stage.omega (both
-# directions).  See setup_omega_laser_interlock in
-# src/id3c/devices/omega_laser_interlock.py (called from
-# src/id3c/startup.py).
-# Position semantics: IN = +75 mm, OUT = -75 mm, tolerance = +/- 1 mm
-# (defaults defined on the LaserOptics class).
-id3c.devices.laser_optics.LaserOptics:
-- name: laser_optics
-  labels: [ "baseline" ]
-  prefix: "3idxps1:"
 
 ## THIS ARE EXAMPLES OF OTHER DEVICES THAT YOU CAN USE
 # ophyd.Signal:

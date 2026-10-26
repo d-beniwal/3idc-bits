@@ -103,10 +103,16 @@ else:
 
 
 # Experiment specific logic, device and plan loading. # Create the devices.
+# Each file loads independently: make_devices logs a failure and moves on, so an
+# offline IOC only costs the devices in its own file.  Core devices first.
 make_devices(clear=False, file="devices.yml", device_manager=instrument)
 
 if host_on_aps_subnet():
     make_devices(clear=False, file="devices_aps_only.yml", device_manager=instrument)
+
+# Optional, separately-hosted devices (may be offline; session still starts).
+make_devices(clear=False, file="devices_laser_optics.yml", device_manager=instrument)
+make_devices(clear=False, file="devices_eiger.yml", device_manager=instrument)
 
 # Install bidirectional Bluesky-session interlock between
 # sample_stage.omega and laser_optics.  See module docstring for scope
@@ -120,8 +126,12 @@ setup_omega_laser_interlock(oregistry)
 setup_baseline_stream(sd, oregistry, connect=False)
 
 # Configure area detector plugins
-eiger2 = oregistry["eiger2"]
-eiger2.hdf1.kind = "hinted"
+# eiger2 is optional: plans that need it raise ComponentNotFound when called.
+eiger2 = oregistry.find(name="eiger2", allow_none=True)
+if eiger2 is None:
+    logger.warning("eiger2 not loaded (IOC offline?); Eiger plans unavailable.")
+else:
+    eiger2.hdf1.kind = "hinted"
 # eiger2.tiff1.kind = "hinted"
 # eiger2.tiff1.kind = "omitted"
 # eiger2.tiff1.stage_sigs["enable"] = 0  # no TIFF files (by default)

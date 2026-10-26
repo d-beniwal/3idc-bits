@@ -1,0 +1,29 @@
+# Guarneri-style device YAML -- Eiger2 area detector (own IOC).
+# Separate from devices.yml so an offline IOC does not block core devices.
+
+apstools.devices.ad_creator:
+  # Eiger2 500k
+  - name: eiger2
+    prefix: "dp_eiger_sn:"
+    labels: ["area_detector", "detectors"]
+    plugins:
+      - cam:
+          class: id3c.devices.area_detector.EigerDetectorCam_V34
+      - image
+      - pva
+      - codec1
+      - hdf1:
+          class: apstools.devices.AD_EpicsFileNameHDF5Plugin
+          write_path_template: "/home/sector3/s3ida/XRD/"
+          read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
+      # tiff1 commented out 2026-06-16: its stage() raises
+      # OSError("Path '/' does not exist on IOC.") because the IOC's
+      # TIFF1:FilePath is '/' and we never set it.  The flyscan plan
+      # does not use TIFF.  Re-enable + initialize file_path when
+      # TIFF output is wanted.
+      # - tiff1:
+      #     class: apstools.devices.AD_EpicsFileNameTIFFPlugin
+      #     write_path_template: "/home/sector3/s3ida/XRD/"
+      #     read_path_template: "/net/s3data/export/sector3/s3ida/XRD/"
+      - roi1
+      - stats1
