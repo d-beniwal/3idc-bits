@@ -33,7 +33,7 @@ as an object::
                           num_images=3))
 
 ``RE(...)`` returns only run uids; to get the list of files use ``yield from``
-inside your own plan, or ``acquire_images(RE, ...)`` below.
+inside your own plan, or ``run_microscope_acquire(RE, ...)`` below.
 
 ``file_path`` must already exist on the IOC's filesystem (the plugin does not create
 it).  Existing files with the same name are overwritten by the plugin.
@@ -50,7 +50,7 @@ from ._registry import find_device
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["microscope_acquire", "acquire_images"]
+__all__ = ["microscope_acquire", "run_microscope_acquire"]
 
 _MARGIN = 30.0  # [s] allowed on top of exposure_time * num_images before giving up
 
@@ -210,7 +210,7 @@ def microscope_acquire(
     return files
 
 
-def acquire_images(RE, file_path, file_name=None, **plan_kwargs):
+def run_microscope_acquire(RE, file_path, file_name=None, **plan_kwargs):
     """Run :func:`microscope_acquire` with ``RE``; return the list of files written.
 
     ``RE(plan)`` only returns run uids, so the plan's return value is captured here.

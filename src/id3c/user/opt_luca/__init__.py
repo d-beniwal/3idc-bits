@@ -9,8 +9,8 @@ import what you need.
   (``run_diode_flyscan(RE, ...)`` for blocking code).
 * ``microscope_acquire.microscope_acquire`` -- acquire frame(s) on the microscope
   (``pg3_camera``) into TIFF
-  files, restoring every setting it touched (``acquire_images(RE, ...)`` to get the
-  file list).
+  files, restoring every setting it touched (``run_microscope_acquire(RE, ...)`` for
+  blocking code, returns the file list).
 
 See ``.context/OPT_LUCA.md`` for the PV inventory and remaining stages.
 """
