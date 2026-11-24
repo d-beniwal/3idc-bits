@@ -1,8 +1,8 @@
 # Guarneri-style device YAML -- KB mirror motors (own IOCs: 3idc, 3idKB).
 # Separate from devices.yml so an offline IOC does not block core devices.
 #
-# Part of the OPT_Luca workstream (Luca Rebuffi's KB-mirror alignment); PV
-# list from .context/OPT_LUCA.md.  Deliberately NOT labeled "baseline" so
+# Part of the autofocus workstream (KB-mirror alignment); PV
+# list from .context/AUTOFOCUS.md.  Deliberately NOT labeled "baseline" so
 # these 8 axes are not read at the start/end of every run; add the label once
 # the motors have proven reliable.
 # Not the same axes as sample_stage / detector_stage (3idc:m36/m42/m69/m70).

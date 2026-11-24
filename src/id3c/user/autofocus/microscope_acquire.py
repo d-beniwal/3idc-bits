@@ -1,11 +1,12 @@
 """``microscope_acquire``: single-shot microscope acquisition as a Bluesky plan.
 
-Replaces what Luca's ``GenericCamera.collect_single_shot_image`` does through raw
-``epics.PV`` calls for the 3-ID-C alignment microscope (``3IDPG3:``, the
-``pg3_camera`` ophyd device): configure the microscope + TIFF plugin, fire the
-microscope, wait until the frame(s) are written.  You choose where the files go
-(``file_path``), their name (``file_name``, ``file_number``, ``index_digits``), the
-exposure time, the number of images and (optionally) the pixel format.
+Replaces what the autofocus program's existing
+``GenericCamera.collect_single_shot_image`` does through raw ``epics.PV`` calls for the
+3-ID-C alignment microscope (``3IDPG3:``, the ``pg3_camera`` ophyd device): configure
+the microscope + TIFF plugin, fire the microscope, wait until the frame(s) are
+written.  You choose where the files go (``file_path``), their name (``file_name``,
+``file_number``, ``index_digits``), the exposure time, the number of images and
+(optionally) the pixel format.
 
 **Settings are put back exactly as they were.**  Before changing anything the plan
 reads the current value of every setting it is going to change, and afterwards --
@@ -17,7 +18,7 @@ acquire state: a microscope that was acquiring before (e.g. a live view) is
 acquiring again afterwards.
 
 No Bluesky *run* is opened: no documents, nothing to Tiled.  The images are the TIFF
-files the IOC writes.  Unlike Luca's code this does not read the PVA stream or
+files the IOC writes.  Unlike the existing code this does not read the PVA stream or
 convert to HDF5.  The plan returns the list of written file paths (as seen by the
 IOC).
 
@@ -27,7 +28,7 @@ keeps "camera"), looked up by name like in the other ``id3c.user`` plans, or pas
 as an object::
 
     from id3c.startup import RE
-    from id3c.user.opt_luca.microscope_acquire import microscope_acquire
+    from id3c.user.autofocus.microscope_acquire import microscope_acquire
 
     RE(microscope_acquire("/home/sector3/s3ida/pg3/", "align", exposure_time=0.1,
                           num_images=3))
@@ -103,7 +104,8 @@ def microscope_acquire(
     file_path : str
         Directory on the microscope IOC's filesystem; must already exist.
     file_name : str, optional
-        File name prefix.  Default (as in Luca's code): ``sample_<exposure in ms>ms``.
+        File name prefix.  Default (as in the existing code):
+        ``sample_<exposure in ms>ms``.
         Files are ``<file_path>/<file_name>_<number>.tif``.
     microscope : area detector with ``cam`` and ``tiff1``, or its registry name
         Default ``"pg3_camera"``.
@@ -113,13 +115,14 @@ def microscope_acquire(
         Frames to take (1 = Single mode, more = Multiple mode); one file each, numbered
         ``file_number``, ``file_number + 1``, ...
     file_number : int
-        Number of the first file (Luca's ``image_index``).
+        Number of the first file (the existing code's ``image_index``).
     index_digits : int, optional
-        Digits of the number in the file name (Luca's ``INDEX_DIGITS``, 5, i.e.
-        ``name_00001.tif``).  Default: leave the plugin's file template as it is.
+        Digits of the number in the file name (the existing code's ``INDEX_DIGITS``,
+        5, i.e. ``name_00001.tif``).  Default: leave the plugin's file template as
+        it is.
     pixel_format : int or str, optional
-        Microscope pixel format (Luca's ``PIXEL_FORMAT``, e.g. 0 = Mono8).  Default:
-        leave it.
+        Microscope pixel format (the existing code's ``PIXEL_FORMAT``, e.g. 0 =
+        Mono8).  Default: leave it.
 
     Returns
     -------

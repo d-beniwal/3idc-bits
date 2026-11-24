@@ -1,4 +1,4 @@
-"""Device lookup shared by the OPT_Luca plans."""
+"""Device lookup shared by the autofocus plans."""
 
 from apsbits.core import instrument_init
 

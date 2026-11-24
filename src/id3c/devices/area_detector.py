@@ -32,5 +32,5 @@ class PointGreyDetectorCam_V34(CamMixin_V34, PointGreyDetectorCam):
 
     Used for the 3-ID-C alignment camera (``3IDPG3:``). ADCore version is
     assumed 3.4, matching :class:`EigerDetectorCam_V34` above; unverified
-    against the live IOC (see ``.context/OPT_LUCA.md``).
+    against the live IOC (see ``.context/AUTOFOCUS.md``).
     """

@@ -1,10 +1,10 @@
-# Porting docs: using the OPT_Luca plans in the optics-alignment workflow
+# Porting docs: using the autofocus plans in the optics-alignment workflow
 
-This folder holds two Bluesky plans that replace the raw-EPICS measurement steps of Luca
-Rebuffi's KB-mirror optics-alignment code (`AI-Beamline-3ID`, built on
-`Common-Libraries`; both are read-only references here and were not modified):
+This folder holds two Bluesky plans for the autofocus program (KB-mirror optics alignment).
+They replace the raw-EPICS measurement steps of its existing code (`AI-Beamline-3ID`, built
+on `Common-Libraries`; both are read-only references here and were not modified):
 
-| Plan | Module | Replaces in Luca's code |
+| Plan | Module | Replaces in the existing autofocus code |
 |---|---|---|
 | `diode_fly` / `run_diode_flyscan` | `flyscan_diode.py` | the bare-PV scaler scan loop of `Beamline3IDBeamManagerScan` (motor H/V + scaler counts) |
 | `microscope_acquire` / `run_microscope_acquire` | `microscope_acquire.py` | the single-shot image acquisition of `GenericCamera.collect_single_shot_image` (used by `Beamline3IDBeamManagerCamera`) |
@@ -16,13 +16,13 @@ microscope or EPICS. See "Checklist for the first beamline run" at the end.
 ## 1. Setup
 
 The modules are not imported by `id3c.startup`, so import them after the startup has run
-(Luca's environment already imports it, which connects the devices on the beamline network;
+(the autofocus environment already imports it, which connects the devices on the beamline network;
 `id3c` must be installed there, not just `apsbits`):
 
 ```python
 from id3c.startup import RE
-from id3c.user.opt_luca.flyscan_diode import FlyAxis, diode_fly, run_diode_flyscan
-from id3c.user.opt_luca.microscope_acquire import (
+from id3c.user.autofocus.flyscan_diode import FlyAxis, diode_fly, run_diode_flyscan
+from id3c.user.autofocus.microscope_acquire import (
     microscope_acquire,
     run_microscope_acquire,
 )
@@ -40,7 +40,7 @@ from id3c.user.opt_luca.microscope_acquire import (
 `RE(plan)` returns only run uids, and with no run that means nothing useful. The plans
 *return* their results, so:
 
-- from blocking code (Luca's scripts), use the helpers `run_diode_flyscan(RE, ...)` and
+- from blocking code (the autofocus scripts), use the helpers `run_diode_flyscan(RE, ...)` and
   `run_microscope_acquire(RE, ...)`; they run the plan and hand back its return value;
 - inside your own plan, write `result = yield from diode_fly(...)`;
 - `RE(diode_fly(...))` / `RE(microscope_acquire(...))` run fine but discard the results.
@@ -55,17 +55,17 @@ Do not `RE.resume()`: a half-flown scan or half-taken image is not resumable.
 
 ## 2. Where the plans fit in the alignment workflow
 
-Luca's loop is: measure the beam, estimate the shift needed, move the KB mirror axes, measure
+The autofocus loop is: measure the beam, estimate the shift needed, move the KB mirror axes, measure
 again, normalizing against the ion-chamber flux. The plans cover the two *measure* steps.
 
-| Alignment step | Luca's code today | With these plans |
+| Alignment step | Existing code today | With these plans |
 |---|---|---|
-| Image of the beam | `GenericCamera.collect_single_shot_image` (raw `epics.PV`, `time.sleep`) | `run_microscope_acquire(RE, file_path, file_name, exposure_time=..., index_digits=5)` returns the TIFF paths; keep Luca's image analysis on those files |
+| Image of the beam | `GenericCamera.collect_single_shot_image` (raw `epics.PV`, `time.sleep`) | `run_microscope_acquire(RE, file_path, file_name, exposure_time=..., index_digits=5)` returns the TIFF paths; keep the existing image analysis on those files |
 | Edge / line scan across the beam | scaler `3ids:scaler1` + motors `3idxps1:m4` (H) and `3idc:m42` (V) via PVs | `run_diode_flyscan(RE, [FlyAxis("sample_stage.xprime", a, b)], ...)` for H, `"sample_stage.base_y"` for V |
 | Flux normalization | initial/current `3ida:scaler1.S2` reads | the `ion_chamber` list (`.S2`) comes from the *same count* as every diode point; divide per point |
 | Move KB mirror axes | KB motor PVs | not covered: the KB motors are not Bluesky devices yet (`kb_mirrors` is a separate device file) |
 
-Luca's H/V motors are already Bluesky devices here: `3idxps1:m4` is `sample_stage.xprime`
+The autofocus H/V motors are already Bluesky devices here: `3idxps1:m4` is `sample_stage.xprime`
 and `3idc:m42` is `sample_stage.base_y`. Reuse them rather than declaring new motors.
 
 A typical use, one alignment iteration:
@@ -86,8 +86,8 @@ diode, ic, pos = run_diode_flyscan(
 )
 profile = [d / i for d, i in zip(diode, ic)]  # guard against ic == 0 in real code
 
-# 3. feed `files` / (pos, profile) to Luca's analysis, move the mirrors his way,
-#    and repeat
+# 3. feed `files` / (pos, profile) to the autofocus analysis, move the mirrors as it
+#    directs, and repeat
 ```
 
 Or compose them in one plan so interlocks and moves happen first:
@@ -104,7 +104,7 @@ def alignment_measure():
     return files, diode, ic, pos
 ```
 
-**Things to settle with Luca before wiring this in:**
+**Things to settle with the autofocus code owners before wiring this in:**
 
 - **Which scaler.** His scan PVs are `3ids:scaler1.*` (`scaler_c`, counts on `.S3`) and his
   flux is `3ida:scaler1.S2`. The defaults here are `3ida:scaler1` (`scaler_b`) S3 for the
@@ -221,14 +221,14 @@ files = run_microscope_acquire(
 
 | Argument | Meaning |
 |---|---|
-| `file_path` | Directory the TIFFs go to, **on the microscope IOC's filesystem**; must already exist (the plugin does not create it). Luca's `measurement_directory`. |
-| `file_name` | File name prefix. Default, as in Luca's code: `sample_<exposure in ms>ms`. Files are `<file_path>/<file_name>_<number>.tif`. |
+| `file_path` | Directory the TIFFs go to, **on the microscope IOC's filesystem**; must already exist (the plugin does not create it). the existing code's `measurement_directory`. |
+| `file_name` | File name prefix. Default, as in the existing code: `sample_<exposure in ms>ms`. Files are `<file_path>/<file_name>_<number>.tif`. |
 | `microscope=` | Area-detector device with `cam` and `tiff1`; registry name or object, default `"pg3_camera"`. |
 | `exposure_time` | Seconds per frame (`cam.acquire_time`). Default: leave the current value. |
 | `num_images` | Frames to take. 1 uses image mode `Single`, more uses `Multiple`. One file per frame. |
-| `file_number` | Number of the first file, default 1 (Luca's `image_index`). |
-| `index_digits` | Digits in the file number; Luca uses 5 (`name_00001.tif`). Default: leave the plugin's file template (normally 4 digits). |
-| `pixel_format` | Pixel format (Luca's `PIXEL_FORMAT`, e.g. 0 = Mono8). Default: leave it. |
+| `file_number` | Number of the first file, default 1 (the existing code's `image_index`). |
+| `index_digits` | Digits in the file number; the existing code uses 5 (`name_00001.tif`). Default: leave the plugin's file template (normally 4 digits). |
+| `pixel_format` | Pixel format (the existing code's `PIXEL_FORMAT`, e.g. 0 = Mono8). Default: leave it. |
 
 Arguments after `file_name` are keyword-only.
 

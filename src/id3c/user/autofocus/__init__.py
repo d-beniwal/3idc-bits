@@ -1,4 +1,4 @@
-"""OPT_Luca workstream: Luca Rebuffi's KB-mirror optics-alignment automation.
+"""Autofocus program: Bluesky plans for the KB-mirror optics-alignment automation.
 
 Bluesky plans for the 3-ID-C optics-alignment tools; none opens a Bluesky run
 (no documents, nothing to Tiled).  Nothing here is imported by ``id3c.startup``;
@@ -12,5 +12,5 @@ import what you need.
   files, restoring every setting it touched (``run_microscope_acquire(RE, ...)`` for
   blocking code, returns the file list).
 
-See ``.context/OPT_LUCA.md`` for the PV inventory and remaining stages.
+See ``.context/AUTOFOCUS.md`` for the PV inventory and remaining stages.
 """

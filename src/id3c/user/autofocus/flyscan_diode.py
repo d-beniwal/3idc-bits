@@ -32,7 +32,7 @@ that ``RE(...)`` returns only run uids (there is no run here), so to *get the li
 interlock moves etc. simply come before it)::
 
     from id3c.startup import RE
-    from id3c.user.opt_luca.flyscan_diode import FlyAxis, run_diode_flyscan
+    from id3c.user.autofocus.flyscan_diode import FlyAxis, run_diode_flyscan
 
     diode, ic, pos = run_diode_flyscan(
         RE, [FlyAxis("sample_stage.xprime", -0.5, 0.5)],
