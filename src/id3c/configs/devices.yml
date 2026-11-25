@@ -78,8 +78,5 @@ ophyd.scaler.ScalerCH:
 # - {name: m4, prefix: gp:m4, labels: ["motor"]}
 
 ophyd.EpicsSignalRO:
-#  - {name: scaler_clock, read_pv: 3ids:scaler1.S1, labels: ["monitor"]}
-#  - {name: IC0_C_counts, read_pv: 3ids:scaler1.S2, labels: ["monitor"]}
-#  - {name: IC1_B_counts, read_pv: 3ida:scaler1.S3, labels: ["monitor"]}
   - {name: IC0_B_VDC, read_pv: 3ida:ADC_5.VAL, labels: ["monitor"]}
   - {name: IC0_C_VDC, read_pv: 3ida:ADC_6.VAL, labels: ["monitor"]}

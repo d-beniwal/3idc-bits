@@ -5,6 +5,7 @@ EPICS area_detector cam definitions for 3-ID-C (and 8-ID-I, where noted).
 from apstools.devices import CamMixin_V34
 from ophyd import ADComponent
 from ophyd import EpicsSignal
+from ophyd import EpicsSignalRO
 from ophyd.areadetector import EigerDetectorCam
 from ophyd.areadetector import PointGreyDetectorCam
 
@@ -34,3 +35,7 @@ class PointGreyDetectorCam_V34(CamMixin_V34, PointGreyDetectorCam):
     assumed 3.4, matching :class:`EigerDetectorCam_V34` above; unverified
     against the live IOC (see ``.context/AUTOFOCUS.md``).
     """
+
+    # Counts callbacks queued or executing downstream of the camera; QueueUse
+    # alone reaches zero while a plugin is still processing the last frame.
+    num_queued_arrays = ADComponent(EpicsSignalRO, "NumQueuedArrays")

@@ -7,10 +7,10 @@ import what you need.
 * ``flyscan_diode.diode_fly`` -- fly motor(s) while counting diode + ion
   chamber on ``scaler_b``; returns ``(diode, ic, positions)`` lists
   (``run_diode_flyscan(RE, ...)`` for blocking code).
-* ``microscope_acquire.microscope_acquire`` -- acquire frame(s) on the microscope
-  (``pg3_camera``) into TIFF
-  files, restoring every setting it touched (``run_microscope_acquire(RE, ...)`` for
-  blocking code, returns the file list).
+* ``microscope_acquire.microscope_acquire`` -- take one image on the microscope
+  (``pg3_camera``), read from the PVA stream as a float32 array (TIFF only with
+  ``save_files=True``), restoring every setting it touched
+  (``run_microscope_acquire(RE, ...)`` for blocking code, returns ``(image, file)``).
 
 See ``.context/AUTOFOCUS.md`` for the PV inventory and remaining stages.
 """

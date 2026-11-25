@@ -9,9 +9,10 @@ on `Common-Libraries`; both are read-only references here and were not modified)
 | `diode_fly` / `run_diode_flyscan` | `flyscan_diode.py` | the bare-PV scaler scan loop of `Beamline3IDBeamManagerScan` (motor H/V + scaler counts) |
 | `microscope_acquire` / `run_microscope_acquire` | `microscope_acquire.py` | the single-shot image acquisition of `GenericCamera.collect_single_shot_image` (used by `Beamline3IDBeamManagerCamera`) |
 
-**Status:** both are tested against simulated devices only (30 tests, kept in
-`BL_instrumentation/opt/tests`, outside this repo). Nothing has run on the real scaler, motors,
-microscope or EPICS. See "Checklist for the first beamline run" at the end.
+**Status:** both are tested offline (33 microscope regressions in this repo, plus
+20 scaler tests in `BL_instrumentation/opt/tests`). Nothing has run on the real scaler, motors,
+microscope or EPICS. The PVA image read (`_read_pva_frame`) is also checked against a real
+`pvapy` stack (loopback server, `opt/tests/pva_reader_check.py`). See "Checklist for the first beamline run" at the end.
 
 ## 1. Setup
 
@@ -60,7 +61,7 @@ again, normalizing against the ion-chamber flux. The plans cover the two *measur
 
 | Alignment step | Existing code today | With these plans |
 |---|---|---|
-| Image of the beam | `GenericCamera.collect_single_shot_image` (raw `epics.PV`, `time.sleep`) | `run_microscope_acquire(RE, file_path, file_name, exposure_time=..., index_digits=5)` returns the TIFF paths; keep the existing image analysis on those files |
+| Image of the beam | `GenericCamera.collect_single_shot_image` (raw `epics.PV`, `time.sleep`) | `run_microscope_acquire(RE, exposure_time=...).image` reads the frame from the PVA stream the way he does (float32, nothing saved); add `save_files=True` and a `file_path` to also get a TIFF |
 | Edge / line scan across the beam | scaler `3ids:scaler1` + motors `3idxps1:m4` (H) and `3idc:m42` (V) via PVs | `run_diode_flyscan(RE, [FlyAxis("sample_stage.xprime", a, b)], ...)` for H, `"sample_stage.base_y"` for V |
 | Flux normalization | initial/current `3ida:scaler1.S2` reads | the `ion_chamber` list (`.S2`) comes from the *same count* as every diode point; divide per point |
 | Move KB mirror axes | KB motor PVs | not covered: the KB motors are not Bluesky devices yet (`kb_mirrors` is a separate device file) |
@@ -72,9 +73,7 @@ A typical use, one alignment iteration:
 
 ```python
 # 1. image of the beam on the microscope
-files = run_microscope_acquire(
-    RE, "/home/sector3/s3ida/pg3/", "kb_align", exposure_time=0.1, index_digits=5
-)
+image = run_microscope_acquire(RE, exposure_time=0.1).image   # float32 (ny, nx); nothing saved
 
 # 2. horizontal edge scan with the diode; ion chamber normalizes it
 diode, ic, pos = run_diode_flyscan(
@@ -86,7 +85,7 @@ diode, ic, pos = run_diode_flyscan(
 )
 profile = [d / i for d, i in zip(diode, ic)]  # guard against ic == 0 in real code
 
-# 3. feed `files` / (pos, profile) to the autofocus analysis, move the mirrors as it
+# 3. feed `image` / (pos, profile) to the autofocus analysis, move the mirrors as it
 #    directs, and repeat
 ```
 
@@ -95,13 +94,11 @@ Or compose them in one plan so interlocks and moves happen first:
 ```python
 def alignment_measure():
     # yield from <plan that moves laser_optics OUT>   # placeholder; only if omega is flown
-    files = yield from microscope_acquire(
-        "/home/sector3/s3ida/pg3/", "kb_align", exposure_time=0.1
-    )
+    shot = yield from microscope_acquire(exposure_time=0.1)   # shot.image
     diode, ic, pos = yield from diode_fly(
         [FlyAxis("sample_stage.xprime", -0.2, 0.2)], n_points=80, t_count=0.05
     )
-    return files, diode, ic, pos
+    return shot.image, diode, ic, pos
 ```
 
 **Things to settle with the autofocus code owners before wiring this in:**
@@ -110,9 +107,12 @@ def alignment_measure():
   flux is `3ida:scaler1.S2`. The defaults here are `3ida:scaler1` (`scaler_b`) S3 for the
   diode and S2 for the ion chamber (from a meeting). Confirm which scaler holds the diode;
   pass `scaler="scaler_c"` if it is the other one.
-- **Image reading.** `microscope_acquire` writes TIFF files and returns their paths. It does
-  not read the PVA stream or convert to HDF5 as his code does, so his analysis must read the
-  files.
+- **Image reading.** `microscope_acquire` returns the array his `_get_image_stream_data` has
+  right after `_, image, ... = adu.reshapeNtNdArray(PV_stream.get(''))` and
+  `copy.deepcopy(image).astype(np.float32)` (the same two lines): float32, shape `(ny, nx)`.
+  Everything after that line stays his: the `h_coord`/`v_coord` axes from the pixel size,
+  `apply_transformations(... image_ops)`, and the HDF5 save. TIFFs are written only with
+  `save_files=True`.
 - **Return shape.** `motor_values` is a list of floats for one axis and a list of tuples for
   several; confirm his code is fine with that.
 - **Python entry point.** `RE` must be the startup's RunEngine, in one process at a time.
@@ -190,79 +190,72 @@ scaler preset time and count mode are always restored, also after an error or ab
 - Don't move the same motor from raw-PV code while the scan runs.
 - KB mirror motors are not Bluesky devices yet, so only `sample_stage`-type axes fly today.
 
-## 4. `microscope_acquire`: single-shot microscope images
-
-### What it does
-
-`microscope_acquire(file_path, file_name=None, *, microscope="pg3_camera", exposure_time=None,
-num_images=1, file_number=1, index_digits=None, pixel_format=None)` sets the microscope and
-TIFF plugin through the RunEngine, takes `num_images` frames, waits until the files are
-written, **puts every setting back**, and returns the list of written file paths (as the IOC
-sees them).
+## 4. `microscope_acquire`: one verified PVA image
 
 ```python
-RE(
-    microscope_acquire(
-        "/home/sector3/s3ida/pg3/", "align", exposure_time=0.1, num_images=3
-    )
+image = run_microscope_acquire(RE, exposure_time=0.1).image
+shot = run_microscope_acquire(
+    RE, "/home/sector3/s3ida/pg3/", "align", exposure_time=0.1,
+    save_files=True, file_number=1,
 )
-
-files = run_microscope_acquire(
-    RE,
-    "/home/sector3/s3ida/pg3/",
-    "align",
-    exposure_time=0.1,
-    num_images=3,
-    file_number=1,
-    index_digits=5,
-)
-# ['/home/sector3/s3ida/pg3/align_00001.tif', ..._00002.tif, ..._00003.tif]
 ```
 
-| Argument | Meaning |
-|---|---|
-| `file_path` | Directory the TIFFs go to, **on the microscope IOC's filesystem**; must already exist (the plugin does not create it). the existing code's `measurement_directory`. |
-| `file_name` | File name prefix. Default, as in the existing code: `sample_<exposure in ms>ms`. Files are `<file_path>/<file_name>_<number>.tif`. |
-| `microscope=` | Area-detector device with `cam` and `tiff1`; registry name or object, default `"pg3_camera"`. |
-| `exposure_time` | Seconds per frame (`cam.acquire_time`). Default: leave the current value. |
-| `num_images` | Frames to take. 1 uses image mode `Single`, more uses `Multiple`. One file per frame. |
-| `file_number` | Number of the first file, default 1 (the existing code's `image_index`). |
-| `index_digits` | Digits in the file number; the existing code uses 5 (`name_00001.tif`). Default: leave the plugin's file template (normally 4 digits). |
-| `pixel_format` | Pixel format (the existing code's `PIXEL_FORMAT`, e.g. 0 = Mono8). Default: leave it. |
+Returns `MicroscopeShot(image, file)`: a private float32 mono `(ny, nx)` array and
+an IOC TIFF path (`None` by default). No Bluesky run is opened. The signature is:
 
-Arguments after `file_name` are keyword-only.
+```python
+microscope_acquire(file_path=None, file_name=None, *, microscope="pg3_camera",
+                   exposure_time=None, save_files=False, file_number=1,
+                   pixel_format=None, pva_pv=None)
+```
 
-### What is changed, and what is restored
+`file_path` is an existing IOC directory and is required only when saving.
+`file_name` defaults to `sample_<exposure in ms>ms`. The plugin's existing TIFF
+filename template is used; an existing file can be overwritten. `exposure_time`
+and `pixel_format` default to keeping their current values. `pva_pv` defaults to
+the plugin's `PvName_RBV`, rather than assuming its name from the CA prefix.
 
-The plan reads the current value of every setting it will change **before** touching
-anything and restores all of them at the end, also after an error, timeout or `RE.abort()`:
+### Why the acquisition waits and checks identity
 
-- always: `cam.image_mode`, `cam.acquire_time`, `tiff1.enable`, `tiff1.file_write_mode` (set
-  to `Single`, one file per frame), `tiff1.file_path`, `tiff1.file_name`,
-  `tiff1.file_number`, `tiff1.auto_increment`, `tiff1.auto_save`;
-- only if you use the option: `cam.num_images`, `cam.pixel_format`, `tiff1.file_template`;
-- the acquire state: a microscope that was acquiring (live view) is stopped for the shot and
-  acquiring again afterwards.
+The camera stops, then every declared ancestor of PVA/TIFF is drained upstream
+first using `NumQueuedArrays`, which includes executing callbacks. A quiet PVA
+counter or an empty input queue alone can miss an old frame still processing in
+a transform. Undeclared/cyclic upstreams and enabled plugin sorting are rejected;
+sorting buffers are not covered by callback queue counts.
 
-Anything else on the microscope or its other plugins (PVA, overlay, transform) is untouched.
+TIFF autosave stays off during the shot. The plan requires exactly one new camera
+frame and one new PVA frame, waits for acquisition and plugin completion, and
+compares the returned NTNDArray's unique ID and EPICS timestamp with the PVA plugin.
+Pixels and metadata come from the same PVA object. Camera IDs are not assumed to
+be equal to the camera's array counter.
 
-### How it decides it is done
+When saving, TIFF must hold that same frame. Its callbacks are disabled to freeze
+the verified buffer; an explicit `WriteFile` command waits for EPICS put completion
+and writer idle, then checks `WriteStatus`/`WriteMessage`. This catches delayed write
+errors that a file-number increment or a fixed sleep cannot. The returned path is
+`FullFileName_RBV` from the IOC.
 
-It starts the microscope and polls until `tiff1.file_number` has advanced by `num_images`
-(the plugin bumps it after each file is written), then until `cam.acquire` is idle, then
-waits 0.1 s for the last file to close. If the files do not appear within
-`exposure_time * num_images + 30 s` it raises `TimeoutError` (usual cause: `file_path` does
-not exist on the IOC), and the settings are still restored.
+### Restoration and failure behavior
 
-### Things to know
+Before any change, the plan snapshots image/trigger mode, any requested exposure
+or pixel-format change, and the TIFF settings it changes. It temporarily selects
+Internal trigger mode (0). Memory-only shots disable TIFF callbacks and autosave;
+save requests buffer with autosave off and write only after frame verification.
+Active TIFF capture/writing and active Single/Multiple camera acquisitions are rejected
+before mutation: open file buffers and partly completed sequences cannot be reconstructed
+by restoring settings.
 
-- The same file name is overwritten: the plugin does not ask.
-- `file_path` and the returned paths are as the **IOC** sees them (e.g.
-  `/home/sector3/s3ida/pg3/`), not necessarily as the machine running the plan does (e.g.
-  `/net/s3data/export/sector3/s3ida/pg3/`; see `read_path_template` in `devices_camera.yml`).
-- `pg3_camera` comes from `devices_camera.yml`, a separate YAML so an offline microscope IOC
-  does not block the core devices; it must be connected.
-- Don't change the same microscope from raw-PV code while the plan runs.
+Cleanup first confirms camera idle, drained plugins, and writer idle. Independent
+settings are restored individually; one failed PV does not skip the others.
+Autosave/callback enable are restored last and live view resumes only after those
+restorations succeed. If stopping/draining fails, dependent settings are left alone
+to avoid changing camera mode or filenames during an exposure/write. Failures raise;
+if acquisition and restoration both fail, an `ExceptionGroup` preserves both errors.
+
+Requires the existing `pvapy` installation and the configured ADCore 3.4 queue,
+identity and TIFF command/status PVs. Regression tests are in
+`src/id3c/tests/test_microscope_acquire.py` (also collected from `opt/tests`).
+Beamline verification is still required; tests never connect to beamline PVs.
 
 ## 5. Checklist for the first beamline run
 
@@ -274,16 +267,20 @@ Both plans are unverified on hardware. Things to confirm:
 - `channels.chan<N>.s` reads are fresh (not monitored), and motor backlash (`BDST`) is small
   versus the run-up distance.
 - Microscope enum strings the plan sets (`"Single"`/`"Multiple"`, `"Enable"`, `"Yes"`) and the
-  `pixel_format` values; that `tiff1.file_number` advances after each file; that restoring
-  saved values reproduces the readbacks (e.g. the path readback may carry a trailing `/`).
+  `pixel_format` values; that explicit TIFF `WriteFile` put completion waits for
+  writing/closing; that restored settings reproduce the saved readbacks (paths may
+  carry a trailing `/`); that every declared camera/plugin `NumQueuedArrays` drains;
+  that PVA/TIFF IDs and EPICS timestamps match the NTNDArray. Check image orientation
+  against live view. Use the existing environment with `pvapy` available.
 
 Suggested order:
 
 1. **Diode fly:** one slow axis, small range, few points. Check the three lists have equal
    length, positions increase steadily, diode/ion chamber look sensible. Then a longer
    range, two axes, and finally omega (interlock out).
-2. **Microscope:** read the current settings; take one image with a known-good `file_path`
-   and check the file and returned path; read the settings again and confirm they match;
-   take `num_images=3` and check three consecutively numbered files; with live view running,
-   confirm it stops for the shot and comes back; start a long acquisition, `RE.abort()` it,
+2. **Microscope:** read the current settings; take one image (default, nothing saved) and
+   check the array shape/dtype/content against the live view and that it is the *new* frame;
+   read the settings again and confirm they match; call it 3 times in a row (each image new?);
+   then `save_files=True` with a known-good `file_path`: check the file and the returned
+   path; with live view running, confirm it stops for the shot and comes back; start a long acquisition, `RE.abort()` it,
    and confirm the microscope stops and the settings return.
